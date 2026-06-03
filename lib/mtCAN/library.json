@@ -1,0 +1,30 @@
+{
+  "name": "mtCAN",
+  "version": "0.1.0",
+  "description": "Micro Transport Layer CAN : Multi-layered CAN communication library for embedded systems",
+  "keywords": [
+    "CAN",
+    "embedded",
+    "STM32",
+    "bxCAN",
+    "IoT",
+    "protocol"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sgsudhir/mtCAN.git"
+  },
+  "authors": [
+    {
+      "name": "Sudhir Giri",
+      "email": "sgsudhir@hotmail.com"
+    }
+  ],
+  "license": "GPL-3.0",
+  "platforms": [
+    "stm32"
+  ],
+  "frameworks": [
+    "Arduino"
+  ]
+}
