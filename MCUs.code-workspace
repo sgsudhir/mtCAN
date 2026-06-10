@@ -1,0 +1,28 @@
+{
+	"folders": [
+		{
+			"path": "../Girihouse/MCUs"
+		},
+		{
+			"name": "Internet_Clock_1",
+			"path": "../Girihouse/MCUs/Internet_Clock_1"
+		},
+		{
+			"name": "dev-1004_out_lights_2",
+			"path": "../Girihouse/MCUs/dev-1004_out_lights_2"
+		},
+		{
+			"name": "BluePill_Test",
+			"path": "../../Documents/PlatformIO/Projects/BluePill_Test"
+		},
+		{
+			"name": "dev_1003_terrace",
+			"path": "../Girihouse/MCUs/dev_1003_terrace"
+		},
+		{
+			"name": "mtCAN",
+			"path": "."
+		}
+	],
+	"settings": {}
+}
