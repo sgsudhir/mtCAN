@@ -1,8 +1,10 @@
 /**
  * @file mtCANL2Engine.h
- * @brief Class definition for the STM32 bxCAN Direct-Mapped Layer 2 Preemptive Processing Engine.
- * * Provides class declarations, buffer metrics, watermarks, flow structures, and object fields
- * required to operate the double-FIFO interrupt-driven matrix-mapped CAN engine.
+ * @brief Object-Oriented Interface for the Isolated Dual-Plane bxCAN Driver Engine.
+ *
+ * Implements a bifurcated software queuing architecture, locking control plane operations
+ * to hardware transmission mailbox 0, and multiplexing application data frames across mailboxes 1 and 2.
+ * Includes explicit specifications for the parallel active routing data sets.
  */
 
 #ifndef MT_CAN_L2_ENGINE_H
@@ -13,210 +15,215 @@
 #include <Arduino.h>
 #include "mtCANTypes.h"
 
-/** * @section Queue Invariant Geometries
- * Parameters sizing and restricting the software circular ring buffers.
- * Sizes must always equal a strict power of two to allow ultra-fast logical bitwise masking
- * instead of expensive division operations to loop circular index boundaries.
- */
+/* ============================================================================
+ * QUEUING BOUNDARIES AND MEMORY MASK BIT CONSTRUCTS
+ * ============================================================================ */
 
-/// @brief Number of storage frame allocations inside the software transmission ring buffer.
-#define M_L2_TX_QUEUE_SIZE 32
+/** @brief Allocation size of the software application data queue buffer. Must remain a power of two. */
+#define M_L2_TX_APP_QUEUE_SIZE 32
 
-/// @brief Bitwise wrapper used to handle ring buffer index wrapping without using an explicit modulo (%) operator.
-#define M_L2_TX_QUEUE_MASK (M_L2_TX_QUEUE_SIZE - 1)
+/** @brief Bitwise wrap mask utilizing power-of-two constraints for fast pointer evaluation. */
+#define M_L2_TX_APP_QUEUE_MASK (M_L2_TX_APP_QUEUE_SIZE - 1)
 
-/** * @section Congestion Management Boundaries
- * Watermark indicators evaluated inside enqueue loops to trip outbound engine throttling structures.
- */
+/** @brief Dedicated safety queue size for isolated system control data frames. */
+#define M_L2_TX_CTRL_QUEUE_SIZE 8
 
-/// @brief Depth threshold matching 85% of total queue allocation. Reaching this forces a congestion state lock.
-#define M_L2_TX_QUEUE_HIGH_WATERMARK 27
+/** @brief Bitwise wrap mask utilizing power-of-two constraints for the control ring buffer. */
+#define M_L2_TX_CTRL_QUEUE_MASK (M_L2_TX_CTRL_QUEUE_SIZE - 1)
 
-/// @brief Clear threshold matching 55% of total queue allocation. Falling below this unlocks the system.
-#define M_L2_TX_QUEUE_LOW_WATERMARK  18
 
-/// @brief Maximum allowed time window a TX queue can remain blocked before forcing a hard engine flush.
-#define M_L2_CONGESTION_TIMEOUT_MS   250
+/* ============================================================================
+ * BACKPRESSURE FLOW CONTROL AND TIMEOUT TIMING LIMITS
+ * ============================================================================ */
 
-/// @brief Maximum life duration allowed for a single frame stuck inside a hardware mailbox before manual revocation.
+/** @brief Upper queue depth limit which triggers backpressure protection and blocks incoming application inputs. */
+#define M_L2_TX_APP_QUEUE_HIGH_WATERMARK 24
+
+/** @brief Lower queue depth clearing point where application data ingestion is safely re-enabled. */
+#define M_L2_TX_APP_QUEUE_LOW_WATERMARK  16
+
+/** @brief Maximum lifespan (in milliseconds) a queue can remain blocked before forcing a software flush. */
+#define M_L2_CONGESTION_TIMEOUT_MS   500
+
+/** @brief Allowed time slice for a hardware transmission mailbox to sit empty/pending before triggering a reset. */
 #define M_L2_QUEUE_STUCK_TIMEOUT_MS  500
 
-/// @brief Threshold tracking consecutive Arbitration Loss events before hardware forces mailbox teardown.
+/** @brief Threshold check of consecutive arbitration loss events before forcing a hardware mailbox clear. */
 #define M_L2_MAX_ALLOWED_ALST_STRIKES 25
 
-/**
- * @enum L2FlowControlState
- * @brief Internal states representing back-pressure condition status of the transmission pipeline.
- */
-enum L2FlowControlState {
-    L2_FLOW_OK = 0,         ///< Transmission stream is clear; software layers may submit packets freely.
-    L2_FLOW_CONGESTED = 1   ///< Throttling activated; queues are saturated, incoming packets are rejected.
-};
 
-/**
- * @class mtCANL2Engine
- * @brief Driver class controlling STM32 Register Configuration and Matrix Packet Routing.
- * * Manages the underlying STM32 bxCAN registers directly while providing a zero-copy direct memory-mapped 
- * matrix interface to upper network layers. It treats incoming data frames as real-time absolute coordinate state 
- * nodes rather than a collection of volatile items inside traditional, sequential circular queues.
- */
+/* ============================================================================
+ * CORE ENGINE CLASS DECLARATION
+ * ============================================================================ */
 class mtCANL2Engine {
 public:
     /**
-     * @brief Construct a new mtCANL2Engine instance.
-     * Sets defaults, binds singleton reference pointers, and processes soft restart counters.
+     * @brief Instantiates the Layer 2 engine controller, binding instance references and clearing statistics.
      */
     mtCANL2Engine();
     
-    /// @brief Default destructor.
+    /**
+     * @brief Default destructor cleaning up peripheral handles during teardown instances.
+     */
     ~mtCANL2Engine() = default;
 
     /**
-     * @brief Direct configuration entry point to assign node boundaries and bring up bxCAN clocks.
-     * * Configures the physical GPIO pins, sets timing profiles, turns on interrupt lines, 
-     * and clears global matrix planes.
-     * * @param assignedNodeId The physical node index assigned to this board instance (0 to 126).
-     * @param commLossTimeoutThresholdMs Lifespan boundary window defining network node drop conditions.
-     * @return true Configuration verified, clocks stable, hardware is running.
-     * @return false Hardware initialization timed out or node ID bounds check failed.
+     * @brief Initialized peripheral configuration for bxCAN hardware and internal routing vectors.
+     * @param assignedNodeId The local network address of this node (clamped strictly between 0 and 64).
+     * @param commLossTimeoutThresholdMs The time slice limit before reporting a total loss of signal on the wire.
+     * @return true if hardware successfully registers initialization mode and leaves without errors.
      */
     bool initialize_hardware(uint8_t assignedNodeId, uint32_t commLossTimeoutThresholdMs = 5000);
     
-    /// @brief Disables internal interrupt lines and drops hardware into a low-power shutdown configuration.
+    /**
+     * @brief Disconnects interrupt parameters and requests a total hardware sleep step.
+     */
     void shutdown_hardware();
     
-    /// @brief Severs interface mappings with the bxCAN hardware controller, forcing a state isolation.
-    void disconnect();
-
     /**
-     * @brief Periodic scheduling point driving outbound mailbox sanity checks, recovery passes, and timeouts.
-     * Must be evaluated regularly inside the primary processing execution pipeline.
+     * @brief Safety unbinding routine that disables NVIC masks and releases interrupt lines.
+     */
+    void disconnect();
+    
+    /**
+     * @brief Periodic background supervisor routine handling stuck mailboxes, timeouts, and tracking.
      */
     void process_tx_management();
+    
+    /**
+     * @brief Pushes an outgoing data package into the Application Plane queue (Mailbox 1 or 2).
+     * @param id29 Complete 29-bit identifier compiled to fit application plane protocols.
+     * @param dataPayload Point referencing the first source element of the byte array block.
+     * @param dataLengthCode Dimensional bound of payload tracking parameters [0 to 8].
+     * @return true if space was available and the package was safely appended.
+     */
+    bool enqueue_app_frame(uint32_t id29, const uint8_t* dataPayload, uint8_t dataLengthCode);
 
     /**
-     * @brief Enqueues a raw layer 2 frame into the local software transmission loop.
-     * * Validates protocol signatures, bounds-checks parameters, handles priority metrics,
-     * and triggers mailbox loads if resources are idle.
-     * * @param id29 Pre-compiled 29-bit CAN Extended identifier containing complete routing fields.
-     * @param dataPayload Source buffer sequence holding byte blocks to transmit.
-     * @param dataLengthCode Count specifying total bytes to copy on wire (0 to 8).
-     * @return true Packet accepted and loaded into software ring buffer.
-     * @return false Congested state active, input criteria invalid, or memory structure saturated.
+     * @brief Pushes an outgoing command package into the high-priority System Control Plane queue (Mailbox 0).
+     * @param id29 Complete 29-bit identifier compiled to fit system plane protocols.
+     * @param dataPayload Pointer referencing the first source element of the control structure.
+     * @param dataLengthCode Dimensional bound of tracking parameter dimensions [0 to 8].
+     * @return true if appended successfully, unaffected by application backpressure.
      */
-    bool enqueue_tx_frame(uint32_t id29, const uint8_t* dataPayload, uint8_t dataLengthCode);
+    bool enqueue_ctrl_frame(uint32_t id29, const uint8_t* dataPayload, uint8_t dataLengthCode);
 
-    /// @brief Clears back-pressure tracking locks and resets the congestion timeout timers.
+    /**
+     * @brief Registers a routing entry into the Parallel Search arrays using an Insertion Sort algorithm.
+     * @param ingressToken The base 29-bit identifier with sequence tracking bits masked out.
+     * @param connIdx The assigned internal storage coordinate index row within g_ApplicationMatrix.
+     * @return true if entry fits and inserts into table slots correctly without duplicates.
+     */
+    bool L2_route_add(uint32_t ingressToken, uint8_t connIdx);
+
+    /**
+     * @brief Drops a routing entry from the Parallel Search arrays, maintaining a continuous block structure.
+     * @param ingressToken The base tracking token to scan and purge from memory arrays.
+     * @return true if entry was found and removed, shift execution tracking safely finalized.
+     */
+    bool L2_route_drop(uint32_t ingressToken);
+
+    /**
+     * @brief Forces backpressure indicators clear and resets congestion trackers immediately.
+     */
     void reset_flow_engine();
-    
-    /// @brief Performs a hard power cycle and reconfiguration across bxCAN hardware networks.
+
+    /**
+     * @brief Total hard-reset cycle for the peripheral chip block to pull it out of lockups or state errors.
+     */
     bool recover_hardware();
-    
-    /// @brief Flushes pending frames and executes a complete initialization recovery to rejoin the live network.
+
+    /**
+     * @brief Performs queue flush steps and triggers a full device re-initialization sequence.
+     */
     bool rejoin_network();
 
     /**
-     * @brief Low-level service router executing inside the TX interrupt execution frame.
-     * Inspects mailbox clear state bitmasks, increments counters, and streams the software queue.
+     * @brief Core outbound hardware dispatch supervisor processing pending items in software lines.
      */
     void handle_tx_interrupt_service_routine();
 
     /**
-     * @brief Direct routing parser executing inside hardware RX interrupt context frames.
-     * * Slices IDs, routes system frames to FIFO0/Circular matrix spaces, and parses application frames 
-     * directly into Layer 4 spatial coordinates across FIFO1 boundaries.
-     * * @param hardwareFifoIndex Defines active processing source (0 = System, 1 = Application).
+     * @brief Core ingress hardware processing logic linked to incoming frame interrupt updates.
+     * @param hardwareFifoIndex Targeting point identifying source vector (FIFO 0 or FIFO 1).
      */
     void handle_rx_interrupt_service_routine(uint8_t hardwareFifoIndex);
 
-    /* --- Telemetry and Diagnostic Metrics API Surface --- */
-    
-    /// @brief Fetches local assigned node ID.
+    /* --- TELEMETRY READ-ONLY INTERFACES --- */
     uint8_t  get_node_id() const { return m_nodeId; }
-    /// @brief Fetches total soft-restarts undergone since power-on.
     uint32_t get_boot_counter() const { return m_nodeBootCounter; }
-    /// @brief Fetches running total of frames pushed onto physical wire.
     uint32_t get_total_transmitted_frames() const { return m_totalTransmittedFrames; }
-    /// @brief Fetches running total of error-free packages parsed from wire.
     uint32_t get_total_received_frames() const { return m_totalReceivedFrames; }
-    /// @brief Fetches historical counts of mailbox collisions resolved by retry drops.
     uint32_t get_tx_arbitration_lost_events() const { return m_txArbitrationLostEvents; }
-    /// @brief Fetches raw counts indicating physical hardware error line triggers.
     uint32_t get_tx_error_hardware_events() const { return m_txErrorHardwareEvents; }
-    /// @brief Fetches total transitions dropped into catastrophic absolute isolation.
     uint32_t get_bus_off_transitions() const { return m_busOffTransitions; }
-    /// @brief Fetches transitions where internal error tracking exceeded 127 counts.
     uint32_t get_error_passive_transitions() const { return m_errorPassiveTransitions; }
-    /// @brief Fetches transitions where tracking crossed warning ceilings (96 counts).
     uint32_t get_error_warning_transitions() const { return m_errorWarningTransitions; }
-    /// @brief Fetches counts showing forced mailbox flushes due to stuck frame drops.
     uint32_t get_mailbox_stall_recoveries() const { return m_mailboxStallRecoveries; }
-    /// @brief Fetches count of physical hardware overruns reported on FIFO 0.
     uint32_t get_fifo0_overrun_events() const { return m_fifo0OverrunEvents; }
-    /// @brief Fetches count of physical hardware overruns reported on FIFO 1.
     uint32_t get_fifo1_overrun_events() const { return m_fifo1OverrunEvents; }
-    /// @brief Fetches frame drop counts induced by space saturation within Application Plane matrix arrays.
     uint32_t get_telemetry_firewall_drops() const { return m_telemetryFirewallDrops; }
-    /// @brief Fetches frame drop counts induced by queue saturation within System Plane circular arrays.
-    uint32_t get_system_matrix_dropped_frames() const { return m_systemMatrixDroppedFrames; }
-    
-    /**
-     * @brief Thread-safe atomic extraction function to inspect and clear the Source Quench request flag.
-     * @return true Quench condition was active and has been cleared down.
-     * @return false No quench pending.
-     */
-    bool     check_and_clear_quench_condition();
+    uint32_t get_control_matrix_dropped_frames() const { return m_controlMatrixDroppedFrames; }
 
-    /// @brief Returns cached representation of physical error layer states.
+    /**
+     * @brief Diagnostic poll verifying network overflow occurrences and logging offending targets.
+     * @param outPlaneState Returns the plane value that triggered the overload fault.
+     * @param outOffendingNodeId Out parameter recording the transmitter that caused the overflow condition.
+     * @return true if an active fault was present and cleared during the call event.
+     */
+    bool check_and_clear_quench_condition(uint8_t& outPlaneState, uint8_t& outOffendingNodeId);
+    
     CanBusErrorState get_current_bus_error_state() const { return m_cachedErrorState; }
-    /// @brief Returns current flow control status restriction profile.
     L2FlowControlState get_current_flow_state() const { return m_flowState; }
 
-    /* --- Inline Queue Geometry Calculations --- */
-    
-    /// @brief Measures current frame count remaining inside software transmission buffer.
-    inline uint16_t get_tx_queue_count() const { return (m_txHead - m_txTail) & M_L2_TX_QUEUE_MASK; }
-    /// @brief Calculates open array space remaining inside the software transmission buffer.
-    inline uint16_t get_tx_queue_free_slots() const { return (M_L2_TX_QUEUE_SIZE - 1) - get_tx_queue_count(); }
-    /// @brief Safety calculation to intercept index overlaps before advancing head.
-    inline bool is_tx_queue_full() const { return (((m_txHead + 1) & M_L2_TX_QUEUE_MASK) == m_txTail); }
-    /// @brief Standard emptiness validation flag.
-    inline bool is_tx_queue_empty() const { return (m_txHead == m_txTail); }
+    /* --- HIGH SPEED INLINE QUEUE DEPTH EVALUATORS --- */
+    inline uint16_t get_tx_app_queue_count() const { return (m_txAppHead - m_txAppTail) & M_L2_TX_APP_QUEUE_MASK; }
+    inline uint16_t get_tx_app_queue_free_slots() const { return (M_L2_TX_APP_QUEUE_SIZE - 1) - get_tx_app_queue_count(); }
+    inline bool is_tx_app_queue_full() const { return (((m_txAppHead + 1) & M_L2_TX_APP_QUEUE_MASK) == m_txAppTail); }
+    inline bool is_tx_app_queue_empty() const { return (m_txAppHead == m_txAppTail); }
 
-    /// @brief Volatile tracking indices exposing System Plane queue boundaries to execution environments.
-    volatile uint8_t m_sysMatrixHead;
-    volatile uint8_t m_sysMatrixTail;
+    inline uint16_t get_tx_ctrl_queue_count() const { return (m_txCtrlHead - m_txCtrlTail) & M_L2_TX_CTRL_QUEUE_MASK; }
+    inline uint16_t get_tx_ctrl_queue_free_slots() const { return (M_L2_TX_CTRL_QUEUE_SIZE - 1) - get_tx_ctrl_queue_count(); }
+    inline bool is_tx_ctrl_queue_full() const { return (((m_txCtrlHead + 1) & M_L2_TX_CTRL_QUEUE_MASK) == m_txCtrlTail); }
+    inline bool is_tx_ctrl_queue_empty() const { return (m_txCtrlHead == m_txCtrlTail); }
+
+    /** @brief Head marker offset track for the global control matrix line storage paths. */
+    volatile uint8_t m_ctrlMatrixHead;
+    
+    /** @brief Tail marker offset track for the global control matrix line storage paths. */
+    volatile uint8_t m_ctrlMatrixTail;
 
 private:
-    /// @brief Resets queue internal indexing trackers to base state under interrupt isolation masks.
     void flush_software_queues();
-    /// @brief Slices filtering rules directly into hardware bxCAN tracking blocks using bit shifts.
     void reconfigure_hardware_filters();
-    /// @brief Portable layer wrapping the low-level timer microsecond/millisecond ticker source.
     uint32_t get_portable_system_timestamp_ms();
 
-    /* --- Internal Core Engine Variables --- */
-    uint8_t  m_nodeId;                     ///< Physical address identifier bound to local node board.
-    uint32_t m_nodeBootCounter;            ///< Running history tracking reset survivals across execution spans.
-    uint32_t m_commLossTimeoutThresholdMs; ///< Duration tracking threshold used to scrap dead connection entries.
+    uint8_t  m_nodeId;
+    uint32_t m_nodeBootCounter;
+    uint32_t m_commLossTimeoutThresholdMs;
 
-    /* --- Outbound Storage Framework --- */
-    CanFrameL2 m_txRingBuffer[M_L2_TX_QUEUE_SIZE]; ///< Memory array buffering frames bound for wire execution.
-    volatile uint16_t m_txHead;                    ///< Producer allocation index tracking next open TX frame block.
-    volatile uint16_t m_txTail;                    ///< Consumer allocation index tracking next frame targeting hardware.
+    /* --- BIFURCATED QUEUE BACKING ARRAY FIELDS --- */
+    CanFrameL2 m_txAppRingBuffer[M_L2_TX_APP_QUEUE_SIZE];
+    volatile uint16_t m_txAppHead;
+    volatile uint16_t m_txAppTail;
 
-    /* --- Congestion State Telemetry Matrix --- */
-    volatile L2FlowControlState m_flowState;    ///< Backpressure state tracking context block.
-    uint32_t m_blockedTimestamp;                ///< Timestamp capture marking initialization of current lock phase.
-    volatile uint32_t m_lastWireActivityTimestamp; ///< Timestamp logging last verified clean bus TX/RX block.
-    volatile bool m_congestionWarningActive;    ///< High-priority signal indicator indicating queue congestion.
-    uint32_t m_congestionWarningStrikes;       ///< Cumulative metrics tracking total congestion lock operations.
+    CanFrameL2 m_txCtrlRingBuffer[M_L2_TX_CTRL_QUEUE_SIZE];
+    volatile uint16_t m_txCtrlHead;
+    volatile uint16_t m_txCtrlTail;
 
-    /* --- Hardware Mailbox Tracking Registries --- */
-    uint32_t m_mailboxTxTimestamp[3];               ///< Timestamp records logging exactly when frame entered each mailbox.
-    volatile uint32_t m_mailboxArbitrationLossCount[3]; ///< Tracking sequential collisions encountered by mailbox channels.
+    volatile L2FlowControlState m_flowState;
+    uint32_t m_blockedTimestamp;
+    volatile uint32_t m_lastWireActivityTimestamp;
+    volatile bool m_congestionWarningActive;
+    uint32_t m_congestionWarningStrikes;
 
-    /* --- Diagnostic Metric Storage Aggregates --- */
+    uint8_t  m_activeRouteCount;
+
+    /* --- HARDWARE TRACKING TIMESTAMPS AND ARBITRATION REGISTERS --- */
+    uint32_t m_mailboxTxTimestamp[3];
+    volatile uint32_t m_mailboxArbitrationLossCount[3];
+
+    /* --- PERSISTENT ANALYTICS AND COUNTER TRACKS --- */
     volatile uint32_t m_totalTransmittedFrames;
     volatile uint32_t m_totalReceivedFrames;
     volatile uint32_t m_fifo0OverrunEvents;
@@ -228,14 +235,25 @@ private:
     volatile uint32_t m_errorWarningTransitions;
     volatile uint32_t m_mailboxStallRecoveries;
     volatile uint32_t m_telemetryFirewallDrops;
-    volatile uint32_t m_systemMatrixDroppedFrames;
-    volatile bool     m_sourceQuenchTriggerPending; ///< Atomic status flag flagging immediate network throttling demands.
+    volatile uint32_t m_controlMatrixDroppedFrames;
 
-    /* --- Telemetry Window Tracking Intervals --- */
-    uint32_t m_lastTelemetrySampleTick; ///< Logs processing window timelines across interval loops.
-    uint32_t m_lastTotalFrameCount;     ///< Captured data benchmark used to calculate bus loading coefficients.
+    /**
+     * @enum L2QuenchState
+     * @brief Internal tracking codes evaluating internal queue overflow exceptions.
+     */
+    enum L2QuenchState : uint8_t {
+        QUENCH_STATE_NONE        = 0,
+        QUENCH_STATE_CONTROL     = 1,
+        QUENCH_STATE_APPLICATION = 2
+    };
 
-    volatile CanBusErrorState m_cachedErrorState; ///< Current status profile tracking internal bxCAN error states.
+    volatile L2QuenchState m_quenchState;
+    volatile uint8_t       m_quenchNodeId;
+
+    uint32_t m_lastTelemetrySampleTick;
+    uint32_t m_lastTotalFrameCount;
+
+    volatile CanBusErrorState m_cachedErrorState;
 };
 
-#endif
+#endif /* MT_CAN_L2_ENGINE_H */

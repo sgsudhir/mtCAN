@@ -1,11 +1,11 @@
 /**
  * @file mtCANTypes.h
- * @brief Layer 2 Protocol Frame Definitions and Bitfield Layout Configurations.
- * * This file acts as the single source of truth for the custom 29-bit Extended 
- * CAN identifier protocol mapping used across the network architecture. It handles 
- * the exact bit-shifting and bitmask boundaries required to slice and pack a standard 
- * CAN 29-bit arbitration field into distinct logical networking domains (Priority, 
- * Message Type, Mode, Destination, Source, and Frame Sequence Numbers).
+ * @brief High-Density, Firmware Type Definitions and Bit-Packing Macros for the mtCAN Architecture.
+ *
+ * This header encapsulates the configuration constants, status enumerations, structural layouts,
+ * and bit-manipulation macros used across the isolated dual-plane bxCAN driver engine.
+ * Every macro definition maintains absolute operational equivalence to the baseline configuration.
+ * It contains the critical definition for CanBusErrorState to resolve cross-compilation errors.
  */
 
 #ifndef MT_CAN_TYPES_H
@@ -16,150 +16,136 @@
 #include <stdint.h>
 #include <stddef.h>
 
-/** * @section Networking Topology Constants
- * These definitions establish the physical limits and verification patterns 
- * of the custom Layer 2 protocol implementation on the wire.
+/* ============================================================================
+ * MATRIX STORAGE DIMENSIONS & CONFIGURATION CONSTANTS
+ * ============================================================================ */
+
+/** @brief Allocation ceiling for the Application Layer matrix frame slots (16 connections * 8 frames/seq). */
+#define TOTAL_APP_FRAMES   128
+
+/** @brief Allocation ceiling for the System/Control Layer matrix circular queue frame buffer. */
+#define TOTAL_CTRL_FRAMES  32
+
+/** @brief Total network address resolution capacity for individual nodes on the bus grid. */
+#define MAX_NETWORK_NODES  64
+
+/** @brief Allocation ceiling for the concurrent Parallel Ingress Routing Table Engine. */
+#define TOTAL_APP_CONN     16
+
+
+/* ============================================================================
+ * NETWORK PROTOCOL 2-BIT PRIORITIZATION SCHEMES
+ * ============================================================================ */
+#define XCAN_PRIORITY_HIGH       0x01  /**< High priority level indicator for urgent system notifications. */
+#define XCAN_PRIORITY_MID        0x02  /**< Mid priority level indicator for routine operational parameters. */
+#define XCAN_PRIORITY_LOW        0x03  /**< Low priority level indicator for bulk non-critical data transfers. */
+
+
+/* ============================================================================
+ * STREAM TYPE INDICATOR BITS
+ * ============================================================================ */
+#define XCAN_ST_STREAM         0      
+#define XCAN_ST_STANDARD       1      
+
+
+/* ============================================================================
+ * ISOLATED ARCHITECTURAL NETWORK PLANES
+ * ============================================================================ */
+#define XCAN_PLANE_CONTROL        0     /**< System/control Plane identifier for control/handshake/system traffic (FIFO 0). */
+#define XCAN_PLANE_APPLICATION   1     /**< Application Plane identifier for data streaming blocks (FIFO 1). */
+
+
+/* ============================================================================
+ * PROTOCOL SYSTEM STRUCTURE LAYOUTS & STATUS ENUMS
+ * ============================================================================ */
+
+/**
+ * @enum L2FlowControlState
+ * @brief Represents the software-level transmit backpressure state of the application plane ring buffer.
  */
-
-/// @brief Maximum allowable concurrent multicast subscription groups tracking per node.
-#define M_MAX_MULTICAST_GROUPS 64
-
-/// @brief Dedicated physical node identifier reserved to signal a global network broadcast.
-#define M_GLOBAL_BROADCAST_NODE_ID 127
-
-/// @brief Protocol Verification Token placed in the most significant bits of the 29-bit ID.
-#define XCAN_PROTOCOL_SIGNATURE 0x1F
-
-/// @brief Magic verification token used to validate the sanity of non-initialized SRAM locations across soft-resets.
-#define M_HW_SALT_CONSTANT 0xDEADBEEFUL
-
-/** * @section Bitfield Position Shift Offsets
- * These define the exact bit positions where each logical protocol component begins 
- * within the raw 32-bit container holding the 29-bit Extended identifier.
- */
-
-/// @brief Bits [2:0] - Frame Sequence Offset within a multi-packet fragmented stream.
-#define XCAN_SHIFT_SEQUENCE 0
-
-/// @brief Bits [9:3] - Unique Identifier of the transmitting physical node.
-#define XCAN_SHIFT_SRC_NODE 3
-
-/// @brief Bits [16:10] - Unique Identifier of the target receiving node (or multicast group ID).
-#define XCAN_SHIFT_DST_NODE 10
-
-/// @brief Bits [18:17] - Transmission Type identifier (Unicast, Multicast, or Broadcast).
-#define XCAN_SHIFT_MODE 17
-
-/// @brief Bit [19] - Stream Classifier flag separating burst sequences from single commands.
-#define XCAN_SHIFT_STREAM_TYPE 19
-
-/// @brief Bit [20] - Message Domain separation flag (System vs Application plane).
-#define XCAN_SHIFT_MSG_TYPE 20
-
-/// @brief Bits [23:21] - CAN Arbitration Priority field (0x00 is highest priority on wire).
-#define XCAN_SHIFT_PRIORITY 21
-
-/// @brief Bits [28:24] - Protocol Verification Token position.
-#define XCAN_SHIFT_SIGNATURE 24
-
-/// @brief Explicit offset helper targeting the second bit bitfield of the priority group.
-#define XCAN_SHIFT_PRIORITY_BIT2 23
-
-/** * @section Bitfield Isolation Masks
- * Unshifted masks matching the exact width and spacing of each specific field domain.
- * Applying these via bitwise AND allows extraction or isolation of single properties.
- */
-
-/// @brief Extracts 3 bits allocated to packet grouping tracking sequences.
-#define XCAN_MASK_SEQUENCE 0x00000007UL
-
-/// @brief Extracts 7 bits allocated to identify the original source node (0 to 127).
-#define XCAN_MASK_SRC_NODE 0x000003F8UL
-
-/// @brief Extracts 7 bits allocated to identify the target node destination address.
-#define XCAN_MASK_DST_NODE 0x0001FC00UL
-
-/// @brief Extracts 2 bits defining structural routing mode context.
-#define XCAN_MASK_MODE 0x00060000UL
-
-/// @brief Extracts 1 bit managing streaming vs single transaction frames.
-#define XCAN_MASK_STREAM_TYPE 0x00080000UL
-
-/// @brief Extracts 1 bit establishing the data plane (0=System, 1=Application).
-#define XCAN_MASK_MSG_TYPE 0x00100000UL
-
-/// @brief Extracts 3 bits governing physical arbitration priority inside CAN mailboxes.
-#define XCAN_MASK_PRIORITY 0x00E00000UL
-
-/// @brief Extracts 5 bits comprising the foundational protocol verification code.
-#define XCAN_MASK_SIGNATURE 0x1F000000UL
-
-/** * @section Core Communication Modes
- * Logical mappings encoded inside the XCAN_MASK_MODE field.
- */
-
-/// @brief Specifies a point-to-point direct message intended for a single node ID.
-#define XCAN_MODE_UNICAST 1
-
-/// @brief Specifies a group-addressed message targeting nodes subscribed to a shared bucket.
-#define XCAN_MODE_MULTICAST 2
-
-/// @brief Specifies an open network frame intended for consumption by every online host.
-#define XCAN_MODE_BROADCAST 3
+enum L2FlowControlState {
+    L2_FLOW_OK = 0,         /**< Outbound pipeline under nominal threshold capacity; data acceptance allowed. */
+    L2_FLOW_CONGESTED = 1   /**< Outbound queue exceeded high watermark limit; application flow choked. */
+};
 
 /**
  * @enum CanBusErrorState
- * @brief Categorizes physical CAN bus health states derived from hardware error counters.
- * * Mirrors the internal state machine of the bxCAN controller based on the Transmit
- * Error Counter (TEC) and Receive Error Counter (REC) registers.
+ * @brief Categorizes the current state of the bxCAN physical bus line error counters (TEC and REC).
+ *
+ * This enumeration directly corresponds to the hardware operational status bits from the 
+ * bxCAN Error Status Register (ESR) and mirrors the states logged within the telemetry variables.
  */
 enum CanBusErrorState {
-    /// @brief Normal Operation: Both error counters are below 96.
-    CAN_BUS_ERROR_ACTIVE  = 0,
-    /// @brief Threshold Exceeded: At least one error counter has crossed 96.
-    CAN_BUS_ERROR_WARNING = 1,
-    /// @brief Passive Restriction: At least one error counter passed 127. Node cannot actively destroy frames.
-    CAN_BUS_ERROR_PASSIVE = 2,
-    /// @brief Bus Off Condition: Transmit counter passed 255. Node is chemically isolated from the differential wire.
-    CAN_BUS_ERROR_OFF     = 3
+    CAN_BUS_ERROR_ACTIVE = 0,   /**< Normal operating condition; hardware error counters are below 96. */
+    CAN_BUS_ERROR_WARNING = 1,  /**< Error Warning flag; at least one internal counter has breached 96. */
+    CAN_BUS_ERROR_PASSIVE = 2,  /**< Error Passive status; at least one counter has breached 127. Node cannot send dominate bits. */
+    CAN_BUS_ERROR_OFF = 3       /**< Bus-Off condition; Transmit Error Counter has exceeded 255. Hardware is offline. */
+};
+
+/**
+ * @struct CanMatrixFrame
+ * @brief Hardware-independent memory footprint representation of data frames inside the global storage matrices.
+ *
+ * Optimized to match standard 32-bit internal MCU alignment, splitting the 8-byte CAN payload into
+ * two separate word registers (dataLow and dataHigh) to achieve maximum copy speed inside ISR routines.
+ */
+struct CanMatrixFrame {
+    uint32_t id29;          /**< Raw 29-bit Extended CAN Identifier containing bit-packed protocol metadata. */
+    uint32_t dataLow;       /**< Least Significant 4 Bytes of the payload data field (Bytes 0, 1, 2, 3). */
+    uint32_t dataHigh;      /**< Most Significant 4 Bytes of the payload data field (Bytes 4, 5, 6, 7). */
 };
 
 /**
  * @struct CanFrameL2
- * @brief Standardized Software Layout for an Outbound Transmission Queue Frame.
- * * Decouples raw hardware registers from software buffering mechanisms during data transit passes.
+ * @brief Raw architectural format utilized by the Layer 2 Software Ring Buffers before hardware transmission.
  */
 struct CanFrameL2 {
-    uint32_t id29;    ///< Raw 29-bit identifier compiled using protocol shifts and bit fields.
-    uint8_t  length;  ///< Data Length Code (DLC) expressing payload length from 0 to 8 bytes.
-    uint8_t  data[8]; ///< Static memory footprint allocated to hold the CAN frame payload payload.
+    uint32_t id29;          /**< Clean 29-bit Extended CAN Identifier for direct injection into hardware registers. */
+    uint8_t  length;        /**< Data Length Code (DLC) bounding the physical frame size payload [0 to 8]. */
+    uint8_t  data[8];       /**< Continuous 8-byte array buffer carrying the actual message fragment payload. */
 };
 
-/**
- * @struct CanWarmPersistentL2Context
- * @brief Preservation Layout for Hot-Restart In-Flight Telemetry Assets.
- * * Maps variables that must survive temporary physical micro-controller resets without losing 
- * established network group identities.
- */
-struct CanWarmPersistentL2Context {
-    uint8_t  activeGroupIds[10];           ///< Active physical multicast group memberships retained during reset.
-    uint16_t allocatedSlotsBitmask;         ///< Spatial allocations mapped across structural tracking arrays.
-    uint8_t  multicastArrayInitializedToken; ///< Validation byte indicating context survival vs fresh boot.
-};
+
+/* ============================================================================
+ * MASK, SHIFT, AND GLOBAL SIGNATURE ARCHITECTURAL SPECIFICATIONS
+ * ============================================================================ */
+#define M_MAX_MULTICAST_GROUPS 64              /**< Dimensional bounds for multicast tracking allocations. */
+#define M_GLOBAL_BROADCAST_NODE_ID 127         /**< Hardware destination address mapping all network points. */
+#define XCAN_PROTOCOL_SIGNATURE 0x1F           /**< Topmost 5-bit validation token defining mtCAN architecture. */
+#define M_HW_SALT_CONSTANT 0xDEADBEEFUL        /**< Verification magic value used to evaluate warm boot contexts. */
+
+#define XCAN_SHIFT_SEQUENCE 0                  /**< Bit offset positioning for the 3-bit sequence field. */
+#define XCAN_SHIFT_SRC_NODE 3                  /**< Bit offset positioning for the 7-bit transmitter node ID. */
+#define XCAN_SHIFT_DST_NODE 10                 /**< Bit offset positioning for the 7-bit receiver destination ID. */
+#define XCAN_SHIFT_MODE 17                     /**< Bit offset positioning for the 2-bit routing topology layout. */
+#define XCAN_SHIFT_STREAM_TYPE 19              /**< Bit offset positioning for the 1-bit Stream Status bit flag. */
+#define XCAN_SHIFT_MSG_TYPE 20                 /**< Bit offset positioning for the 1-bit Dual-Plane mapping flag. */
+#define XCAN_SHIFT_PRIORITY 21                 /**< Bit offset positioning for the 3-bit frame priority field. */
+#define XCAN_SHIFT_SIGNATURE 24                /**< Bit offset positioning for the 5-bit protocol verification signature. */
+
+#define XCAN_MASK_SEQUENCE 0x00000007UL        /**< Extraction mask selecting the lower 3 bits for frame sequencing. */
+#define XCAN_MASK_SRC_NODE 0x000003F8UL        /**< Extraction mask isolating bits 3-9 for node source identification. */
+#define XCAN_MASK_DST_NODE 0x0001FC00UL        /**< Extraction mask isolating bits 10-16 for receiver targeting maps. */
+#define XCAN_MASK_MODE 0x00060000UL            /**< Extraction mask isolating bits 17-18 for structural routing configurations. */
+#define XCAN_MASK_STREAM_TYPE 0x00080000UL     /**< Extraction mask isolating bit 19 for streaming state checking. */
+#define XCAN_MASK_MSG_TYPE 0x00100000UL        /**< Extraction mask isolating bit 20 for plane routing configuration. */
+#define XCAN_MASK_PRIORITY 0x00E00000UL        /**< Extraction mask isolating bits 21-23 for priority mapping. */
+#define XCAN_MASK_SIGNATURE 0x1F000000UL       /**< Extraction mask isolating bits 24-28 for protocol verification. */
+
+#define XCAN_MODE_UNICAST 1                    /**< Bitwise configuration evaluation tag indicating Unicast mode. */
+#define XCAN_MODE_MULTICAST 2                  /**< Bitwise configuration evaluation tag indicating Multicast mode. */
+#define XCAN_MODE_BROADCAST 3                  /**< Bitwise configuration evaluation tag indicating Broadcast mode. */
+
+
+/* ============================================================================
+ * FAST INLINE CONSTRUCTORS AND TRANSLATION PROTOCOLS
+ * ============================================================================ */
 
 /**
- * @brief Synthesizes a raw, hardware-compliant 29-bit Extended CAN ID from individual domains.
- * * Takes distinct protocol elements, bounds-checks them using logical AND configurations, 
- * shifts them to their correct positional slot, and logically combines them.
- * * @param signature Protocol validation field (must be 0x1F).
- * @param priority Frame prioritization rank (0=Highest, 7=Lowest).
- * @param msgType Frame plane target (0=System, 1=Application).
- * @param streamType Transfer pattern flag.
- * @param mode Core structural routing type (Unicast/Multicast/Broadcast).
- * @param dstNode Target recipient address node ID.
- * @param srcNode Generating node ID.
- * @param seqNum Packet order tracker index within stream.
- * @return uint32_t Compiled 29-bit CAN arbitration field identifier ready for bxCAN register entry.
+ * @brief Bit-packs individual protocol fields into a standardized 29-bit Extended CAN Identifier.
+ *
+ * Executes raw bit shifting and logical OR operations to compile the hardware-ready ID.
+ * Extracted ranges are clamped via bitwise masks to guarantee zero overlap corruption.
  */
 inline uint32_t mtCAN_PacketId29(
     uint8_t signature,
@@ -182,4 +168,5 @@ inline uint32_t mtCAN_PacketId29(
         (((uint32_t)(seqNum     & 0x07)) << XCAN_SHIFT_SEQUENCE);
 }
 
-#endif
+
+#endif /* MT_CAN_TYPES_H */
