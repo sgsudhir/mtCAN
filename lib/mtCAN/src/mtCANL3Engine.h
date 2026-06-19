@@ -32,7 +32,8 @@
 #define L3_STATUS_ERR_CONGESTED             0x01  /**< Outgoing pipelines are full. Transmission blocked. */
 #define L3_STATUS_ERR_INVALID_SIZE          0x02  /**< Message payload size requested is too big (above 63 bytes) or null. */
 #define L3_STATUS_ERR_L2_FAILED             0x03  /**< Layer 2 hardware injection ring buffer refused frame allocation. */
-#define XCAN_L3_STATUS_ERR_INVALID_TOKEN    0x04  /**< The addressing tracking token failed architectural layout tests. */
+#define L3_STATUS_ERR_INVALID_CTRL_TYPE     0x04  /**< The control frame command type byte is unrecognized or out of range. */
+#define XCAN_L3_STATUS_ERR_INVALID_TOKEN    0x05  /**< The addressing tracking token failed architectural layout tests. */
 
 // --- RTC Error Operational Codes ---
 #define L3_RTC_STATUS_OK                    0x00  /**< Real-time clock successfully configured or updated. */
@@ -133,6 +134,8 @@ public:
     uint8_t send(uint32_t connectionToken, const uint8_t* payload, uint8_t size);
     /** @brief Sends a small management system packet (up to 7 bytes) across the Control Plane. */
     uint8_t send_ctrl(uint32_t connectionToken, L3CtrlType type, const uint8_t* payload, uint8_t size);
+    /** @brief This is a special API that allows upper layers to tunnel control messages through the Layer 3 control interface. */
+    uint8_t tunnel_send_ctrl(uint32_t connectionToken, const uint8_t* payload, uint8_t size); 
 
     // --- Core Autonomous Protocol Handlers ---
     /** @brief Dispatches a diagnostic latency tracking request frame to a designated node. 

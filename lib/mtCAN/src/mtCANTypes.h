@@ -24,11 +24,17 @@
  * MATRIX STORAGE DIMENSIONS & CONFIGURATION CONSTANTS
  * ============================================================================ */
 
+ /** * @brief Allocation ceiling for the concurrent Parallel Ingress Routing Table Engine. 
+ * LAYMAN: This allows up to 16 completely separate, simultaneous multi-frame message streams 
+ * to be actively received and assembled at the exact same time without breaking order.
+ */
+#define TOTAL_APP_CONN     16
+
 /** * @brief Allocation ceiling for the Application Layer matrix frame slots (16 connections * 8 frames/seq). 
  * LAYMAN: This defines the absolute maximum number of sub-frames we can store for larger messages.
  * 16 parallel channels multiplied by 8 sequential slots each equals 128 total tracking frames.
  */
-#define TOTAL_APP_FRAMES   128
+#define TOTAL_APP_FRAMES   (TOTAL_APP_CONN * 8)
 
 /** * @brief Allocation ceiling for the System/Control Layer matrix circular queue frame buffer. 
  * LAYMAN: A dedicated pool of 32 slots reserved strictly for network management tasks like 
@@ -41,11 +47,6 @@
  */
 #define MAX_NETWORK_NODES  64
 
-/** * @brief Allocation ceiling for the concurrent Parallel Ingress Routing Table Engine. 
- * LAYMAN: This allows up to 16 completely separate, simultaneous multi-frame message streams 
- * to be actively received and assembled at the exact same time without breaking order.
- */
-#define TOTAL_APP_CONN     16
 
 
 /* ============================================================================

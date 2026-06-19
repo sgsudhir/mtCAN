@@ -136,6 +136,26 @@ uint8_t mtCANL3Engine::send_ctrl(uint32_t connectionToken, L3CtrlType type, cons
 }
 
 /**
+ * @brief This is a special API that allows upper layers to tunnel control messages through the Layer 3 control interface.
+ * * LAYMAN: This is a unique escape hatch that allows upper application layers to send small control messages 
+ * (up to 7 bytes) through the Layer 3 control interface. It bypasses the standard command type byte and lets you 
+ * pack your own custom payload directly into the control frame, which can be useful for advanced users who want 
+ * to implement their own custom system plane protocols without being constrained by the predefined L3CtrlType enum.
+ */
+uint8_t mtCANL3Engine::tunnel_send_ctrl(uint32_t connectionToken, const uint8_t* payload, uint8_t size) {
+    if (!validate_outgress_token(connectionToken)) return XCAN_L3_STATUS_ERR_INVALID_TOKEN;
+    if (size > 8 || size < 1 || (payload == nullptr)) return L3_STATUS_ERR_INVALID_SIZE;
+    if (payload[0] >> 7 == 0) return L3_STATUS_ERR_INVALID_CTRL_TYPE; // Ensure the first byte doesn't conflict with reserved command types
+
+    uint32_t ctrlId29 = prepare_control_frame_id(connectionToken, 2); // Force priority = 2 for control plane compliance
+    // Pass directly to the Layer 2 Control Plane ring buffer array pipeline
+    if (!m_l2Engine.enqueue_ctrl_frame(ctrlId29, payload, size)) {
+        return L3_STATUS_ERR_L2_FAILED;
+    }
+    return L3_STATUS_OK;
+}
+
+/**
  * @brief Generates and manages an outbound latency validation request (Ping).
  * * LAYMAN: This is where we safely find or recycle tracking resources. If all 4 tracking slots 
  * are currently active (waiting for responses), we parse our local list to locate the oldest 
@@ -557,20 +577,20 @@ void mtCANL3Engine::process_control_rx_pipeline() {
         uint32_t dLow = g_ControlMatrix[tailIdx].dataLow;
         uint32_t dHigh = g_ControlMatrix[tailIdx].dataHigh;
 
-        uint8_t sysPayload[8];
-        sysPayload[0] = (uint8_t)(dLow & 0xFF);
-        sysPayload[1] = (uint8_t)((dLow >> 8) & 0xFF);
-        sysPayload[2] = (uint8_t)((dLow >> 16) & 0xFF);
-        sysPayload[3] = (uint8_t)(dLow >> 24);
-        sysPayload[4] = (uint8_t)(dHigh & 0xFF);
-        sysPayload[5] = (uint8_t)((dHigh >> 8) & 0xFF);
-        sysPayload[6] = (uint8_t)((dHigh >> 16) & 0xFF);
-        sysPayload[7] = (uint8_t)(dHigh >> 24);
+        uint8_t ctrlPayload[8];
+        ctrlPayload[0] = (uint8_t)(dLow & 0xFF);
+        ctrlPayload[1] = (uint8_t)((dLow >> 8) & 0xFF);
+        ctrlPayload[2] = (uint8_t)((dLow >> 16) & 0xFF);
+        ctrlPayload[3] = (uint8_t)(dLow >> 24);
+        ctrlPayload[4] = (uint8_t)(dHigh & 0xFF);
+        ctrlPayload[5] = (uint8_t)((dHigh >> 8) & 0xFF);
+        ctrlPayload[6] = (uint8_t)((dHigh >> 16) & 0xFF);
+        ctrlPayload[7] = (uint8_t)(dHigh >> 24);
 
-        uint8_t primaryHeaderByte = sysPayload[0];
+        uint8_t primaryHeaderByte = ctrlPayload[0];
 
         if ((primaryHeaderByte & 0x80) != 0) {
-            callback_control_plane(sysId29, &sysPayload[1], 7);
+            callback_control_plane(sysId29, &ctrlPayload[1], 7);
         } else {
             uint8_t enumCommandType = primaryHeaderByte & 0x7F;
 
@@ -579,10 +599,10 @@ void mtCANL3Engine::process_control_rx_pipeline() {
                 uint8_t sourceNodeId = (uint8_t)((sysId29 & XCAN_MASK_SRC_NODE) >> XCAN_SHIFT_SRC_NODE);
                 
                 if (routingMode == XCAN_MODE_UNICAST && sourceNodeId <= 63) {
-                    uint32_t incomingReplayToken = ((uint32_t)sysPayload[4] << 24) | 
-                                                   ((uint32_t)sysPayload[3] << 16) | 
-                                                   ((uint32_t)sysPayload[2] << 8)  | 
-                                                   ((uint32_t)sysPayload[1]);
+                    uint32_t incomingReplayToken = ((uint32_t)ctrlPayload[4] << 24) | 
+                                                   ((uint32_t)ctrlPayload[3] << 16) | 
+                                                   ((uint32_t)ctrlPayload[2] << 8)  | 
+                                                   ((uint32_t)ctrlPayload[1]);
 
                     uint32_t echoOutToken = convert_ingress_to_outgress(sysId29);
                     
@@ -595,10 +615,10 @@ void mtCANL3Engine::process_control_rx_pipeline() {
                     send_ctrl(echoOutToken, L3_CTRL_PING_RESP, echoPayload, 4);
                 }
             } else if (enumCommandType == L3_CTRL_PING_RESP) {
-                uint32_t receivedToken = ((uint32_t)sysPayload[4] << 24) | 
-                                         ((uint32_t)sysPayload[3] << 16) | 
-                                         ((uint32_t)sysPayload[2] << 8)  | 
-                                         ((uint32_t)sysPayload[1]);
+                uint32_t receivedToken = ((uint32_t)ctrlPayload[4] << 24) | 
+                                         ((uint32_t)ctrlPayload[3] << 16) | 
+                                         ((uint32_t)ctrlPayload[2] << 8)  | 
+                                         ((uint32_t)ctrlPayload[1]);
                 uint32_t rightNowUs = (uint32_t)micros(); 
 
                 // Match response to an active registry item
@@ -619,13 +639,13 @@ void mtCANL3Engine::process_control_rx_pipeline() {
                     }
                 }
             } else if (enumCommandType == XCAN_L3_CTRL_NTP_MASTER) {
-                uint32_t masterSecondsEpoch = ((uint32_t)sysPayload[4] << 24) | 
-                                              ((uint32_t)sysPayload[3] << 16) | 
-                                              ((uint32_t)sysPayload[2] << 8)  | 
-                                              ((uint32_t)sysPayload[1]);
+                uint32_t masterSecondsEpoch = ((uint32_t)ctrlPayload[4] << 24) | 
+                                              ((uint32_t)ctrlPayload[3] << 16) | 
+                                              ((uint32_t)ctrlPayload[2] << 8)  | 
+                                              ((uint32_t)ctrlPayload[1]);
                 set_system_time_from_epoch(masterSecondsEpoch);
             } else {
-                callback_ctrl(sysId29, enumCommandType, &sysPayload[1], 7);
+                callback_ctrl(sysId29, enumCommandType, &ctrlPayload[1], 7);
             }
         }
 
