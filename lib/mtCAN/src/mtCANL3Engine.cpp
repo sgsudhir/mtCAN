@@ -57,7 +57,7 @@ void mtCANL3Engine::init() {
 
 /**
  * @brief Slices a wide application buffer into sequential 8-byte frames and pushes them into the Layer 2 queue.
- * * LAYMAN: This is the core fragmentation algorithm. If you hand it a 20-byte string, it figures out that 
+ * *  This is the core fragmentation algorithm. If you hand it a 20-byte string, it figures out that 
  * 3 physical frames are required. Frame 0 stores the total message length in byte 0, followed by 7 bytes of data. 
  * Frames 1 and 2 carry 8 data bytes each until completed. It loops through, packs the proper chunk sequence index 
  * into the 29-bit header, and passes them to Layer 2 to be queued.
@@ -119,7 +119,7 @@ uint8_t mtCANL3Engine::send_ctrl(uint32_t connectionToken, L3CtrlType type, cons
     if (!validate_outgress_token(connectionToken)) return XCAN_L3_STATUS_ERR_INVALID_TOKEN;
     if (size > 7 || (size > 0 && payload == nullptr)) return L3_STATUS_ERR_INVALID_SIZE;
 
-    uint32_t ctrlId29 = prepare_control_frame_id(connectionToken, 2); // Force priority = 2 for control plane compliance
+    uint32_t ctrlId29 = convert_app_token_to_control_token(connectionToken, 2); // Force priority = 2 for control plane compliance
     uint8_t frameBuffer[8];
     frameBuffer[0] = (uint8_t)type & 0x7F; // Command specifier resides inside the system plane header byte position
 
@@ -137,7 +137,7 @@ uint8_t mtCANL3Engine::send_ctrl(uint32_t connectionToken, L3CtrlType type, cons
 
 /**
  * @brief This is a special API that allows upper layers to tunnel control messages through the Layer 3 control interface.
- * * LAYMAN: This is a unique escape hatch that allows upper application layers to send small control messages 
+ * *  This is a unique escape hatch that allows upper application layers to send small control messages 
  * (up to 7 bytes) through the Layer 3 control interface. It bypasses the standard command type byte and lets you 
  * pack your own custom payload directly into the control frame, which can be useful for advanced users who want 
  * to implement their own custom system plane protocols without being constrained by the predefined L3CtrlType enum.
@@ -147,7 +147,7 @@ uint8_t mtCANL3Engine::tunnel_send_ctrl(uint32_t connectionToken, const uint8_t*
     if (size > 8 || size < 1 || (payload == nullptr)) return L3_STATUS_ERR_INVALID_SIZE;
     if (payload[0] >> 7 == 0) return L3_STATUS_ERR_INVALID_CTRL_TYPE; // Ensure the first byte doesn't conflict with reserved command types
 
-    uint32_t ctrlId29 = prepare_control_frame_id(connectionToken, 2); // Force priority = 2 for control plane compliance
+    uint32_t ctrlId29 = convert_app_token_to_control_token(connectionToken, 2); // Force priority = 2 for control plane compliance
     // Pass directly to the Layer 2 Control Plane ring buffer array pipeline
     if (!m_l2Engine.enqueue_ctrl_frame(ctrlId29, payload, size)) {
         return L3_STATUS_ERR_L2_FAILED;
@@ -157,7 +157,7 @@ uint8_t mtCANL3Engine::tunnel_send_ctrl(uint32_t connectionToken, const uint8_t*
 
 /**
  * @brief Generates and manages an outbound latency validation request (Ping).
- * * LAYMAN: This is where we safely find or recycle tracking resources. If all 4 tracking slots 
+ * *  This is where we safely find or recycle tracking resources. If all 4 tracking slots 
  * are currently active (waiting for responses), we parse our local list to locate the oldest 
  * active ping based on its timestamp. We select that slot, overwrite it with our new token details, 
  * and dispatch the command over the control plane wire.
@@ -238,7 +238,7 @@ uint8_t mtCANL3Engine::send_ntp_master(uint32_t connection_token, uint32_t unix_
 
 /**
  * @brief Updates the real-time clock tracker using standard calendar structural ranges.
- * * LAYMAN: Converts years, months, and days down into a raw global 32-bit second counter value. 
+ * *  Converts years, months, and days down into a raw global 32-bit second counter value. 
  * This contains strict boundary logic constraining years exclusively between 2000 and 2099 to eliminate 
  * any catastrophic calendar roll errors inside our Gregorian epoch calculation loops.
  */
@@ -321,7 +321,7 @@ uint8_t mtCANL3Engine::get_system_time(mtTimeStructure& outputTargetBuffer) cons
 
 /**
  * @brief Scans and compiles fragmented multi-frame packets residing inside the application data matrix.
- * * LAYMAN: This is our background factory pipeline. It continually loops over our 16 parallel data lanes. 
+ * *  This is our background factory pipeline. It continually loops over our 16 parallel data lanes. 
  * If it notices that a lane has received data but hasn't updated within 500ms, it logs an Inter-Frame Timeout 
  * error and wipes the slot. If a packet is actively flowing, it verifies that the incoming sub-frames are numerical 
  * neighbors (Sequence check: 0, 1, 2...) and that their address tokens match perfectly. Once all bits in our tracking 
@@ -354,7 +354,7 @@ void mtCANL3Engine::process_application_rx_pipeline() {
                     }
 
                     // Alert upper level code of timeout exception
-                    callback_error(trackingRecoveryToken, L3_ERR_INTER_FRAME_TIMEOUT);
+                    callback_L4_error(trackingRecoveryToken, L3_ERR_INTER_FRAME_TIMEOUT);
                     
                     // Fully clear state trackers back to neutral
                     m_appTrackers[laneIdx].receivedFramesMask = 0;
@@ -435,7 +435,7 @@ void mtCANL3Engine::process_application_rx_pipeline() {
             if (anomalyToken == 0) anomalyToken = ((uint32_t)laneIdx << XCAN_SHIFT_DST_NODE);
 
             uint8_t errCode = structuralBreachDetected ? L3_ERR_SEQUENCE_CORRUPTION : XCAN_L3_ERR_TOKEN_INCONSISTENCY;
-            callback_error(anomalyToken, errCode);
+            callback_L4_error(anomalyToken, errCode);
             
             m_appTrackers[laneIdx].receivedFramesMask = 0;
             m_appTrackers[laneIdx].expectedFramesCount = 0;
@@ -492,7 +492,7 @@ void mtCANL3Engine::process_application_rx_pipeline() {
             }
 
             m_laneStats[laneIdx].completedPackets++;
-            callback_rX(unifiedToken, userBufferArray, l4Size); // Dispatch the full rebuilt letter up the stack!
+            callback_L4_rX(unifiedToken, userBufferArray, l4Size); // Dispatch the full rebuilt letter up the stack!
 
             // Fully clear tracking context variables before enabling hardware registers to avoid race conditions
             m_appTrackers[laneIdx].receivedFramesMask = 0;
@@ -509,7 +509,7 @@ void mtCANL3Engine::process_application_rx_pipeline() {
             // Cyclical evaluation backup checking if the timeout clock breached during partial fragment collection gaps
             if ((currentTick - m_appTrackers[laneIdx].lastFrameTimestampMs) > L3_INTERFRAME_TIMEOUT_MS) {
                 m_laneStats[laneIdx].timeoutEvents++;
-                callback_error(unifiedToken, L3_ERR_INTER_FRAME_TIMEOUT);
+                callback_L4_error(unifiedToken, L3_ERR_INTER_FRAME_TIMEOUT);
                 
                 m_appTrackers[laneIdx].receivedFramesMask = 0;
                 m_appTrackers[laneIdx].expectedFramesCount = 0;
@@ -527,7 +527,7 @@ void mtCANL3Engine::process_application_rx_pipeline() {
 
 /**
  * @brief Processes incoming system, clock, and diagnostic maintenance frames from the control queue.
- * * LAYMAN: This scans the circular queue managed by Layer 2. When a frame drops in, it parses the command byte.
+ * *  This scans the circular queue managed by Layer 2. When a frame drops in, it parses the command byte.
  * - If it's a PING REQUEST, it builds a matching response packet, flips the routing token, and sends an echo back.
  * - If it's a PING RESPONSE, it grabs the current microsecond clock, finds the matching registry slot, clears it, 
  * calculates total round-trip microsecond latency, and delivers a report via callback_ping_report.
@@ -590,7 +590,7 @@ void mtCANL3Engine::process_control_rx_pipeline() {
         uint8_t primaryHeaderByte = ctrlPayload[0];
 
         if ((primaryHeaderByte & 0x80) != 0) {
-            callback_control_plane(sysId29, &ctrlPayload[1], 7);
+            callback_L4_ctrl(sysId29, primaryHeaderByte, &ctrlPayload[1], 7);
         } else {
             uint8_t enumCommandType = primaryHeaderByte & 0x7F;
 
@@ -645,7 +645,7 @@ void mtCANL3Engine::process_control_rx_pipeline() {
                                               ((uint32_t)ctrlPayload[1]);
                 set_system_time_from_epoch(masterSecondsEpoch);
             } else {
-                callback_ctrl(sysId29, enumCommandType, &ctrlPayload[1], 7);
+                callback_L3_ctrl(sysId29, enumCommandType, &ctrlPayload[1], 7);
             }
         }
 

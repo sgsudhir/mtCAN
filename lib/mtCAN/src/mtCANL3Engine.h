@@ -47,7 +47,7 @@
 
 // --- System Plane Protocol Command Enumerations ---
 /**
- * LAYMAN: Internal command system codes for the Control Plane. These tell the background system handler 
+ *  Internal command system codes for the Control Plane. These tell the background system handler 
  * what kind of maintenance task is happening inside a received control envelope.
  */
 enum L3CtrlType : uint8_t {
@@ -60,7 +60,7 @@ enum L3CtrlType : uint8_t {
 
 // --- Real-time Clock Structural Definitions ---
 /**
- * LAYMAN: A human-readable calendar layout structure used to set or read the system clock.
+ *  A human-readable calendar layout structure used to set or read the system clock.
  */
 struct mtTimeStructure {
     uint8_t  seconds;      /**< Seconds tracking window [0 to 59] */
@@ -74,7 +74,7 @@ struct mtTimeStructure {
 
 // --- Microsecond Diagnostics Ping Structural Elements ---
 /**
- * LAYMAN: A tracker structure stored inside the local memory matrix to log details of an ongoing ping.
+ *  A tracker structure stored inside the local memory matrix to log details of an ongoing ping.
  * When we send a ping, we record a unique random token number and save the exact microsecond timestamp 
  * of when it left. When the receiver echoes it back, we subtract the old timestamp from the current clock 
  * to find the exact round-trip travel time.
@@ -89,7 +89,7 @@ struct PingTracker {
 
 // --- Layer 3 Channel Diagnostics Telemetry Block ---
 /**
- * LAYMAN: Built-in scoreboard counters tracking the overall health, performance, and line error stats 
+ *  Built-in scoreboard counters tracking the overall health, performance, and line error stats 
  * for each individual multi-frame routing lane.
  */
 struct L3ChannelStats {
@@ -103,7 +103,7 @@ struct L3ChannelStats {
 /**
  * @struct L3SessionControl
  * @brief Manages the active step-by-step assembly tracking information for a multi-frame reception lane.
- * * LAYMAN: When multi-frame packets hit a lane, we need to remember state without pausing execution. 
+ * *  When multi-frame packets hit a lane, we need to remember state without pausing execution. 
  * This records when the last chunk arrived (to catch timeouts), how many frames we are expecting in total, 
  * and uses bit-masks (where each bit represents a frame slot index) to check off frames as they arrive.
  */
@@ -188,7 +188,7 @@ private:
     bool     m_isStallClockRunning; /**< Tracks whether the 500ms group purge countdown is currently active */
 
     /** * @brief Math conversion calculation to figure out exactly how many individual 8-byte postcards are needed.
-     * LAYMAN: The first frame loses 1 byte to the Layer 3 size header, leaving 7 bytes for content. 
+     *  The first frame loses 1 byte to the Layer 3 size header, leaving 7 bytes for content. 
      * Subsequent frames have the full 8 bytes available. This arithmetic handles that calculation exactly.
      */
     inline uint8_t calculate_expected_frames(uint8_t l4Size) const {
@@ -199,13 +199,13 @@ private:
 
 // --- Upper Layer Abstract Callback Contracts ---
 /**
- * LAYMAN: These are "hooks" or event notification targets. When Layer 3 finishes assembling a whole letter, 
+ *  These are "hooks" or event notification targets. When Layer 3 finishes assembling a whole letter, 
  * caught an error, or evaluated a ping, it calls these functions to hand the results up to the higher application code.
  */
-extern void callback_rX(uint32_t connectionToken, uint8_t* targetBuffer, uint8_t size);
-extern void callback_ctrl(uint32_t connectionToken, uint8_t type, const uint8_t* payload, uint8_t size);
-extern void callback_control_plane(uint32_t connectionToken, const uint8_t* payload, uint8_t size);
-extern void callback_error(uint32_t connectionToken, uint8_t errorCode);
+extern void callback_L3_ctrl(uint32_t connectionToken, uint8_t type, const uint8_t* payload, uint8_t size);
+extern void callback_L4_ctrl(uint32_t connectionToken, uint8_t baseHeader, const uint8_t* payload, uint8_t size);
+extern void callback_L4_rX(uint32_t connectionToken, uint8_t* targetBuffer, uint8_t size);
+extern void callback_L4_error(uint32_t connectionToken, uint8_t errorCode);
 extern void callback_ping_report(uint32_t connectionToken, uint8_t sequenceId, uint32_t roundTripTimeUs);
 
 #endif // MT_CAN_L3_ENGINE_H

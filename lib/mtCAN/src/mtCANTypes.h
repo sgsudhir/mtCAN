@@ -25,25 +25,25 @@
  * ============================================================================ */
 
  /** * @brief Allocation ceiling for the concurrent Parallel Ingress Routing Table Engine. 
- * LAYMAN: This allows up to 16 completely separate, simultaneous multi-frame message streams 
+ *  This allows up to 16 completely separate, simultaneous multi-frame message streams 
  * to be actively received and assembled at the exact same time without breaking order.
  */
 #define TOTAL_APP_CONN     16
 
 /** * @brief Allocation ceiling for the Application Layer matrix frame slots (16 connections * 8 frames/seq). 
- * LAYMAN: This defines the absolute maximum number of sub-frames we can store for larger messages.
+ *  This defines the absolute maximum number of sub-frames we can store for larger messages.
  * 16 parallel channels multiplied by 8 sequential slots each equals 128 total tracking frames.
  */
 #define TOTAL_APP_FRAMES   (TOTAL_APP_CONN * 8)
 
 /** * @brief Allocation ceiling for the System/Control Layer matrix circular queue frame buffer. 
- * LAYMAN: A dedicated pool of 32 slots reserved strictly for network management tasks like 
+ *  A dedicated pool of 32 slots reserved strictly for network management tasks like 
  * checking connections (pings) and setting clocks (time synchronization).
  */
 #define TOTAL_CTRL_FRAMES  32
 
 /** * @brief Total network address resolution capacity for individual nodes on the bus grid. 
- * LAYMAN: This represents the total number of hardware devices (nodes) allowed on this CAN network grid (0 to 63).
+ *  This represents the total number of hardware devices (nodes) allowed on this CAN network grid (0 to 63).
  */
 #define MAX_NETWORK_NODES  64
 
@@ -53,7 +53,7 @@
  * NETWORK PROTOCOL 2-BIT PRIORITIZATION SCHEMES
  * ============================================================================ */
 /**
- * LAYMAN: When multiple devices try to speak at the same exact millisecond on a CAN bus, 
+ *  When multiple devices try to speak at the same exact millisecond on a CAN bus, 
  * the lower priority number automatically wins the hardware tug-of-war and goes first.
  */
 #define XCAN_PRIORITY_HIGH       0x01  /**< High priority level indicator for urgent system notifications. */
@@ -65,28 +65,28 @@
  * STREAM TYPE INDICATOR BITS
  * ============================================================================ */
 /**
- * LAYMAN: Determines if a message is a continuous raw data stream (like audio/sensor dumps)
+ *  Determines if a message is a continuous raw data stream (like audio/sensor dumps)
  * or if it's a standard standalone packet that requires strict data boundaries.
- */
-#define XCAN_ST_STREAM         0      
-#define XCAN_ST_STANDARD       1      
+ */      
+#define XCAN_ST_STANDARD       0      
+#define XCAN_ST_STREAM         1
 
 
 /* ============================================================================
  * ISOLATED ARCHITECTURAL NETWORK PLANES
  * ============================================================================ */
 /**
- * LAYMAN: To keep things running smoothly, we split our network into two virtual "freeways":
+ *  To keep things running smoothly, we split our network into two virtual "freeways":
  * 1. Control Plane: Handles commands, heartbeats, and coordination. Uses Hardware FIFO 0.
  * 2. Application Plane: Handles bulk data, user payload messages. Uses Hardware FIFO 1.
  */
-#define XCAN_PLANE_CONTROL        0     /**< System/control Plane identifier for control/handshake/system traffic (FIFO 0). */
+#define XCAN_PLANE_CONTROL       0     /**< System/control Plane identifier for control/handshake/system traffic (FIFO 0). */
 #define XCAN_PLANE_APPLICATION   1     /**< Application Plane identifier for data streaming blocks (FIFO 1). */
 
 
 // --- Direct Node Address Properties ---
-#define M_MAX_UNICAST_NODE_ID   31         /**< Maximum address bound for 00b prefix Unicast paths */
-#define M_GLOBAL_BROADCAST_NODE_ID 127     /**< LAYMAN: The magical target ID that means "Everyone listen up! This message is for everyone." */
+#define M_MAX_UNICAST_NODE_ID       31          /**< Maximum address bound for 00b prefix Unicast paths */
+#define M_GLOBAL_BROADCAST_NODE_ID  127         /**<  The magical target ID that means "Everyone listen up! This message is for everyone." */
 
 /* ============================================================================
  * PROTOCOL SYSTEM STRUCTURE LAYOUTS & STATUS ENUMS
@@ -95,7 +95,7 @@
 /**
  * @enum L2FlowControlState
  * @brief Represents the software-level transmit backpressure state of the application plane ring buffer.
- * * LAYMAN: This is our internal traffic light system. If our hardware transmission buffers are wide open, 
+ * *  This is our internal traffic light system. If our hardware transmission buffers are wide open, 
  * the state is OK. If they get filled up with pending outgoing messages, we set it to CONGESTED 
  * so our application layer slows down and stops trying to jam more data into the pipe.
  */
@@ -108,7 +108,7 @@ enum L2FlowControlState {
  * @enum CanBusErrorState
  * @brief Categorizes the current state of the bxCAN physical bus line error counters (TEC and REC).
  *
- * LAYMAN: Microcontrollers have dedicated physical hardware monitoring the health of the CAN wires. 
+ *  Microcontrollers have dedicated physical hardware monitoring the health of the CAN wires. 
  * If a wire gets snipped, loose, or suffers electromagnetic interference, the chip increases error counters. 
  * This tracking enum lets our code monitor those counts so we know if the bus is perfectly healthy (ACTIVE), 
  * glitching slightly (WARNING), heavily failing (PASSIVE), or completely shut down by the chip's internal breakers (OFF).
@@ -124,7 +124,7 @@ enum CanBusErrorState {
  * @struct CanMatrixFrame
  * @brief Hardware-independent memory footprint representation of data frames inside the global storage matrices.
  *
- * LAYMAN: A raw CAN frame can hold up to 8 bytes of raw content. For maximum execution speed on modern 
+ *  A raw CAN frame can hold up to 8 bytes of raw content. For maximum execution speed on modern 
  * 32-bit microcontrollers, it is much faster to slice those 8 bytes into two 32-bit words (dataLow for 
  * the first 4 bytes, and dataHigh for the remaining 4 bytes). This layout mirrors that high-speed optimization 
  * alongside the 29-bit CAN tracking ID.
@@ -138,7 +138,7 @@ struct CanMatrixFrame {
 /**
  * @struct CanFrameL2
  * @brief Raw architectural format utilized by the Layer 2 Software Ring Buffers before hardware transmission.
- * * LAYMAN: This is standard format for an outbound envelope right before it is loaded into the microcontroller's 
+ * *  This is standard format for an outbound envelope right before it is loaded into the microcontroller's 
  * physical radio transmitter registers. It keeps the ID, the true size of the payload (Length: 0 to 8 bytes), 
  * and a direct, standard byte array containing the data.
  */
@@ -153,7 +153,7 @@ struct CanFrameL2 {
  * MASK, SHIFT, AND GLOBAL SIGNATURE ARCHITECTURAL SPECIFICATIONS
  * ============================================================================ */
 /**
- * LAYMAN: This is where the magic layout occurs. A 29-bit integer is just a sequence of 29 ones and zeros. 
+ *  This is where the magic layout occurs. A 29-bit integer is just a sequence of 29 ones and zeros. 
  * To pack multiple pieces of information into a single number, we slice up those bits like slices of pie.
  * * Visual Layout of the 29-bit Header:
  * [ Signature (5b) ][ Priority (3b) ][ MsgType (1b) ][ StreamType (1b) ][ Mode (2b) ][ DstNode (7b) ][ SrcNode (7b) ][ Sequence (3b) ]
@@ -195,7 +195,7 @@ struct CanFrameL2 {
 /**
  * @brief Bit-packs individual protocol fields into a standardized 29-bit Extended CAN Identifier.
  *
- * LAYMAN: This utility function is our "envelope address builder". You hand it all the distinct items—like 
+ *  This utility function is our "envelope address builder". You hand it all the distinct items—like 
  * who you are, who you're talking to, how important the message is, and what chunk index it is—and it shifts 
  * and glues them together using bitwise OR operations into one massive 29-bit integer that CAN hardware accepts.
  */
@@ -362,6 +362,56 @@ inline uint32_t convert_ingress_to_outgress(uint32_t ingressToken) {
     return flippedToken;
 }
 
+/**
+ * @brief Safely extracts the 3-bit Connection ID (Priority) from a valid application token.
+ * @param appToken The raw 29-bit CAN token to parse.
+ * @return uint8_t The extracted connection ID (2-7), or 0xFF if validation fails.
+ */
+inline uint8_t get_connection_id_from_app_token(uint32_t appToken) {
+    // Structural check: Must match our exact outgress application token design
+    if ((appToken & XCAN_MASK_SIGNATURE) != ((uint32_t)XCAN_PROTOCOL_SIGNATURE << XCAN_SHIFT_SIGNATURE)) return 0xFF;
+    if ((appToken & XCAN_MASK_MODE) != ((uint32_t)XCAN_MODE_UNICAST << XCAN_SHIFT_MODE)) return 0xFF;
+    if ((appToken & XCAN_MASK_SEQUENCE) != 0) return 0xFF;
+
+    // Isolate the 3-bit priority field
+    uint8_t connID = (uint8_t)((appToken & XCAN_MASK_PRIORITY) >> XCAN_SHIFT_PRIORITY);
+
+    // Enforce the Application Plane boundary rule (Priority must be between 2 and 7)
+    if (connID < 2 || connID > 7) {
+        return 0xFF; 
+    }
+
+    return connID;
+}
+
+/**
+ * @brief Regenerates a full Application Plane Token from a matching Control Token and Connection ID.
+ * @param controlToken The raw inbound control plane token (MT = 0).
+ * @param connID The 3-bit connection priority identifier (Must be 2-7).
+ * @return uint32_t The fully formed application token (MT = 1), or 0 if verification fails.
+ */
+inline uint32_t convert_control_token_to_app_token(uint32_t controlToken, uint8_t connID) {
+    // 1. Boundary Guard: Reject invalid IDs trying to spoof System Space
+    if (connID < 2 || connID > 7) {
+        return 0; 
+    }
+
+    // 2. Validate basic token structure (Signature, Unicast Mode, and Sequence must be 0)
+    if ((controlToken & XCAN_MASK_SIGNATURE) != ((uint32_t)XCAN_PROTOCOL_SIGNATURE << XCAN_SHIFT_SIGNATURE)) return 0;
+    if ((controlToken & XCAN_MASK_MODE) != ((uint32_t)XCAN_MODE_UNICAST << XCAN_SHIFT_MODE)) return 0;
+    if ((controlToken & XCAN_MASK_SEQUENCE) != 0) return 0;
+
+    // 3. Clear existing Priority, Message Type (MT), and Stream Type (ST) fields
+    uint32_t appToken = controlToken & ~(XCAN_MASK_PRIORITY | XCAN_MASK_MSG_TYPE | XCAN_MASK_STREAM_TYPE);
+
+    // 4. Inject the validated connID as the new priority, force MT = 1 (Application Plane)
+    // and keep default ST = 0 (XCAN_ST_STREAM)
+    appToken |= ((uint32_t)connID << XCAN_SHIFT_PRIORITY);
+    appToken |= ((uint32_t)XCAN_PLANE_APPLICATION << XCAN_SHIFT_MSG_TYPE);
+    appToken |= ((uint32_t)XCAN_ST_STREAM << XCAN_SHIFT_STREAM_TYPE);
+
+    return appToken;
+}
 
 /**
  * @brief Prepares an Application Token for transmitting Control/System frames.
@@ -370,7 +420,7 @@ inline uint32_t convert_ingress_to_outgress(uint32_t ingressToken) {
  * * @param priority Optional override for control frame priority (default = 2).
  * @return uint32_t System-ready transmission identifier.
  */
-inline uint32_t prepare_control_frame_id(uint32_t appToken, uint8_t priority = 2) {
+inline uint32_t convert_app_token_to_control_token(uint32_t appToken, uint8_t priority = 2) {
     // 1. Strip the Sequence field, MT field, and Priority field
     uint32_t ctrlToken = appToken & ~(XCAN_MASK_SEQUENCE | XCAN_MASK_MSG_TYPE | XCAN_MASK_PRIORITY);
 
@@ -382,8 +432,6 @@ inline uint32_t prepare_control_frame_id(uint32_t appToken, uint8_t priority = 2
     // 4. Sequence defaults to 0 (already cleared above)
     return ctrlToken;
 }
-
-
 
 
 #endif /* MT_CAN_TYPES_H */
