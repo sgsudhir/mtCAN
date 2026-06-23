@@ -17,7 +17,6 @@
 
 #pragma once
 
-#include <Arduino.h>
 #include "mtCANL2Engine.h"
 #include "mtCANTypes.h"
 

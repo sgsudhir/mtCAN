@@ -2,14 +2,12 @@
  * @file mtCANTypes.h
  * @brief High-Density, Firmware Type Definitions and Bit-Packing Macros for the mtCAN Architecture.
  *
- * LAYMAN EXPLANATION:
- * This file acts as a global master dictionary for our custom CAN network. When electronics
- * talk to each other over a CAN bus, they share data in small chunks called "frames". This file 
- * describes the exact structure of those frames, the rules of who gets to speak first (Priority),
- * and how we pack a bunch of information (like who sent the message, who is supposed to receive it,
- * and what part of a larger multi-frame puzzle it belongs to) into a single 29-bit identification number.
- * * Think of it as defining the size of the envelopes and the formatting rules for the addresses 
- * written on them.
+ * This file acts as the foundational layer defining how data frames are formatted, structured, 
+ * and verified across the network bus. It defines the structural layout of 29-bit Extended 
+ * CAN Identifiers (CAN ID) and provides rapid translation utilities for moving between network 
+ * driver tokens, source/destination node addressing, and operational priority lanes.
+ * * Designed for high-reliability embedded control environments where network synchronization,
+ * message ordering, and collision avoidance are non-negotiable prerequisites.
  */
 
 #ifndef MT_CAN_TYPES_H
@@ -19,185 +17,178 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <string.h>
 
 /* ============================================================================
  * MATRIX STORAGE DIMENSIONS & CONFIGURATION CONSTANTS
  * ============================================================================ */
 
- /** * @brief Allocation ceiling for the concurrent Parallel Ingress Routing Table Engine. 
- *  This allows up to 16 completely separate, simultaneous multi-frame message streams 
- * to be actively received and assembled at the exact same time without breaking order.
+/**
+ * @brief The absolute maximum number of multi-client communication slots managed simultaneously.
+ * Denotes how many independent sessions the software stack can track in parallel memory.
  */
-#define TOTAL_APP_CONN     16
+#define L4_MAX_PARALLEL_SESSIONS            8
 
-/** * @brief Allocation ceiling for the Application Layer matrix frame slots (16 connections * 8 frames/seq). 
- *  This defines the absolute maximum number of sub-frames we can store for larger messages.
- * 16 parallel channels multiplied by 8 sequential slots each equals 128 total tracking frames.
+/**
+ * @brief Mirror mapping of total application layer connections allowed at any one instance.
+ * Directly dependent on the hardware slot limitations.
  */
-#define TOTAL_APP_FRAMES   (TOTAL_APP_CONN * 8)
+#define TOTAL_APP_CONN                      (L4_MAX_PARALLEL_SESSIONS)
 
-/** * @brief Allocation ceiling for the System/Control Layer matrix circular queue frame buffer. 
- *  A dedicated pool of 32 slots reserved strictly for network management tasks like 
- * checking connections (pings) and setting clocks (time synchronization).
+/**
+ * @brief Total pool size for unique physical nodes addressable within this bus network topology.
+ * Allocates room for node identifiers ranging sequentially from index 0 to 63.
  */
-#define TOTAL_CTRL_FRAMES  32
+#define MAX_NETWORK_NODES                   64
 
-/** * @brief Total network address resolution capacity for individual nodes on the bus grid. 
- *  This represents the total number of hardware devices (nodes) allowed on this CAN network grid (0 to 63).
+/**
+ * @brief Specific revision signature identifier tracking the wire format specification.
+ * Used during handshake protocols to ensure protocol compatibility across different nodes.
  */
-#define MAX_NETWORK_NODES  64
+#define XCAN_PROTOCOL_VERSION_V1            0x01
 
-
+#define M_HW_SALT_CONSTANT                  0xDEADBEEFUL        
 
 /* ============================================================================
  * NETWORK PROTOCOL 2-BIT PRIORITIZATION SCHEMES
  * ============================================================================ */
-/**
- *  When multiple devices try to speak at the same exact millisecond on a CAN bus, 
- * the lower priority number automatically wins the hardware tug-of-war and goes first.
- */
-#define XCAN_PRIORITY_HIGH       0x01  /**< High priority level indicator for urgent system notifications. */
-#define XCAN_PRIORITY_MID        0x02  /**< Mid priority level indicator for routine operational parameters. */
-#define XCAN_PRIORITY_LOW        0x03  /**< Low priority level indicator for bulk non-critical data transfers. */
 
+/**
+ * @brief Urgent/Real-Time message priority allocation flag (Highest transmission preference).
+ * Used for critical telemetry updates, diagnostic overrides, or emergency events.
+ */
+#define XCAN_PRIORITY_HIGH                  0x01
+
+/**
+ * @brief Nominal/Standard operational message priority allocation flag.
+ * Used for standard data telemetry frames that require consistent tracking but lack strict real-time deadlines.
+ */
+#define XCAN_PRIORITY_MID                   0x02
+
+/**
+ * @brief Background/Bulk message priority allocation flag (Lowest transmission preference).
+ * Used for massive file transfers, debugging blocks, or secondary telemetry logs.
+ */
+#define XCAN_PRIORITY_LOW                   0x03
 
 /* ============================================================================
  * STREAM TYPE INDICATOR BITS
  * ============================================================================ */
-/**
- *  Determines if a message is a continuous raw data stream (like audio/sensor dumps)
- * or if it's a standard standalone packet that requires strict data boundaries.
- */      
-#define XCAN_ST_STANDARD       0      
-#define XCAN_ST_STREAM         1
 
+/**
+ * @brief Standard Data Frame Indicator. Represents single-packet transmissions or independent messages.
+ */
+#define XCAN_ST_STANDARD                    0      
+
+/**
+ * @brief Streaming Segment Indicator. Indicates the packet belongs to a continuous data stream.
+ */
+#define XCAN_ST_STREAM                      1
 
 /* ============================================================================
  * ISOLATED ARCHITECTURAL NETWORK PLANES
  * ============================================================================ */
+
 /**
- *  To keep things running smoothly, we split our network into two virtual "freeways":
- * 1. Control Plane: Handles commands, heartbeats, and coordination. Uses Hardware FIFO 0.
- * 2. Application Plane: Handles bulk data, user payload messages. Uses Hardware FIFO 1.
+ * @brief Plane assigned for handshake commands, session negotiations, and keep-alive tracking.
+ * Maps to hardware FIFO 0 to isolate network control planes from throughput traffic bottlenecks.
  */
-#define XCAN_PLANE_CONTROL       0     /**< System/control Plane identifier for control/handshake/system traffic (FIFO 0). */
-#define XCAN_PLANE_APPLICATION   1     /**< Application Plane identifier for data streaming blocks (FIFO 1). */
-
-
-// --- Direct Node Address Properties ---
-#define M_MAX_UNICAST_NODE_ID       31          /**< Maximum address bound for 00b prefix Unicast paths */
-#define M_GLOBAL_BROADCAST_NODE_ID  127         /**<  The magical target ID that means "Everyone listen up! This message is for everyone." */
-
-/* ============================================================================
- * PROTOCOL SYSTEM STRUCTURE LAYOUTS & STATUS ENUMS
- * ============================================================================ */
+#define XCAN_PLANE_CONTROL                  0     
 
 /**
- * @enum L2FlowControlState
- * @brief Represents the software-level transmit backpressure state of the application plane ring buffer.
- * *  This is our internal traffic light system. If our hardware transmission buffers are wide open, 
- * the state is OK. If they get filled up with pending outgoing messages, we set it to CONGESTED 
- * so our application layer slows down and stops trying to jam more data into the pipe.
+ * @brief Plane optimized for heavy data payload streams, multi-segment arrays, and file transfers.
+ * Maps to hardware FIFO 1 to handle maximum throughput without interrupting signaling mechanisms.
+ */
+#define XCAN_PLANE_APPLICATION              1     
+
+/**
+ * @brief Maximum permitted ID for a single, uniquely addressable recipient device.
+ */
+#define M_MAX_UNICAST_NODE_ID               31          
+
+/**
+ * @brief Universal broadcast address targeting all active listening nodes on the bus.
+ */
+#define M_GLOBAL_BROADCAST_NODE_ID          127         
+
+/**
+ * @brief Flow Control Status reporting options utilized by Layer 2 driver abstractions.
  */
 enum L2FlowControlState {
-    L2_FLOW_OK = 0,         /**< Outbound pipeline under nominal threshold capacity; data acceptance allowed. */
-    L2_FLOW_CONGESTED = 1   /**< Outbound queue exceeded high watermark limit; application flow choked. */
+    L2_FLOW_OK = 0,         /**< Transmitter/Receiver buffer is clear; communication may proceed normally. */
+    L2_FLOW_CONGESTED = 1   /**< Hardware/Software queues are full; backing off transmission immediately. */
 };
 
 /**
- * @enum CanBusErrorState
- * @brief Categorizes the current state of the bxCAN physical bus line error counters (TEC and REC).
- *
- *  Microcontrollers have dedicated physical hardware monitoring the health of the CAN wires. 
- * If a wire gets snipped, loose, or suffers electromagnetic interference, the chip increases error counters. 
- * This tracking enum lets our code monitor those counts so we know if the bus is perfectly healthy (ACTIVE), 
- * glitching slightly (WARNING), heavily failing (PASSIVE), or completely shut down by the chip's internal breakers (OFF).
+ * @brief Hardware-level error monitoring flags tracking physical CAN bus electrical stability.
  */
 enum CanBusErrorState {
-    CAN_BUS_ERROR_ACTIVE = 0,   /**< Normal operating condition; hardware error counters are below 96. */
-    CAN_BUS_ERROR_WARNING = 1,  /**< Error Warning flag; at least one internal counter has breached 96. */
-    CAN_BUS_ERROR_PASSIVE = 2,  /**< Error Passive status; at least one counter has breached 127. Node cannot send dominate bits. */
-    CAN_BUS_ERROR_OFF = 3       /**< Bus-Off condition; Transmit Error Counter has exceeded 255. Hardware is offline. */
+    CAN_BUS_ERROR_ACTIVE = 0,   /**< Normal healthy bus; device actively participates in error flag signaling. */
+    CAN_BUS_ERROR_WARNING = 1,  /**< Error counters elevated; slight wire noise or transient signal distortion detected. */
+    CAN_BUS_ERROR_PASSIVE = 2,  /**< Error counters critical; device listens but cannot forcefully interrupt the bus. */
+    CAN_BUS_ERROR_OFF = 3       /**< Controller has physically disconnected from the bus due to excessive transmission failure. */
 };
 
 /**
- * @struct CanMatrixFrame
- * @brief Hardware-independent memory footprint representation of data frames inside the global storage matrices.
- *
- *  A raw CAN frame can hold up to 8 bytes of raw content. For maximum execution speed on modern 
- * 32-bit microcontrollers, it is much faster to slice those 8 bytes into two 32-bit words (dataLow for 
- * the first 4 bytes, and dataHigh for the remaining 4 bytes). This layout mirrors that high-speed optimization 
- * alongside the 29-bit CAN tracking ID.
+ * @brief Raw hardware-aligned memory map representation of a 29-bit CAN frame identifier split across registers.
  */
 struct CanMatrixFrame {
-    uint32_t id29;          /**< Raw 29-bit Extended CAN Identifier containing bit-packed protocol metadata. */
-    uint32_t dataLow;       /**< Least Significant 4 Bytes of the payload data field (Bytes 0, 1, 2, 3). */
-    uint32_t dataHigh;      /**< Most Significant 4 Bytes of the payload data field (Bytes 4, 5, 6, 7). */
+    uint32_t id29;          /**< The packed 29-bit Extended Identifier integer. */
+    uint32_t dataLow;       /**< Least Significant 32 bits (Bytes 0-3) of the physical packet data payload. */
+    uint32_t dataHigh;      /**< Most Significant 32 bits (Bytes 4-7) of the physical packet data payload. */
 };
 
 /**
- * @struct CanFrameL2
- * @brief Raw architectural format utilized by the Layer 2 Software Ring Buffers before hardware transmission.
- * *  This is standard format for an outbound envelope right before it is loaded into the microcontroller's 
- * physical radio transmitter registers. It keeps the ID, the true size of the payload (Length: 0 to 8 bytes), 
- * and a direct, standard byte array containing the data.
+ * @brief High-level application driver structure containing a standard parsed Layer 2 data element.
  */
 struct CanFrameL2 {
-    uint32_t id29;          /**< Clean 29-bit Extended CAN Identifier for direct injection into hardware registers. */
-    uint8_t  length;        /**< Data Length Code (DLC) bounding the physical frame size payload [0 to 8]. */
-    uint8_t  data[8];       /**< Continuous 8-byte array buffer carrying the actual message fragment payload. */
+    uint32_t id29;          /**< Comprehensive 29-bit identification token containing packed protocol headers. */
+    uint8_t  length;        /**< Actual payload data length size (ranges safely from 0 to 8 bytes for standard CAN). */
+    uint8_t  data[8];       /**< Safe static array container holding raw byte arrays received or staged for TX. */
 };
-
 
 /* ============================================================================
  * MASK, SHIFT, AND GLOBAL SIGNATURE ARCHITECTURAL SPECIFICATIONS
  * ============================================================================ */
-/**
- *  This is where the magic layout occurs. A 29-bit integer is just a sequence of 29 ones and zeros. 
- * To pack multiple pieces of information into a single number, we slice up those bits like slices of pie.
- * * Visual Layout of the 29-bit Header:
- * [ Signature (5b) ][ Priority (3b) ][ MsgType (1b) ][ StreamType (1b) ][ Mode (2b) ][ DstNode (7b) ][ SrcNode (7b) ][ Sequence (3b) ]
- * * The "SHIFT" macros tell the computer how many slots to move a value to the left to put it in its right slice.
- * The "MASK" macros act as templates to clean out everything else when we try to read that specific slice.
- */
+#define M_MAX_MULTICAST_GROUPS              64              
+#define XCAN_PROTOCOL_SIGNATURE             0x1F           /**< Unique 5-bit signature checking valid mtCAN frames. */
 
-#define M_MAX_MULTICAST_GROUPS 64              /**< Dimensional bounds for multicast tracking allocations. */
-#define XCAN_PROTOCOL_SIGNATURE 0x1F           /**< Topmost 5-bit validation token defining mtCAN architecture. All our packets must start with this signature! */
-#define M_HW_SALT_CONSTANT 0xDEADBEEFUL        /**< Verification magic value used to evaluate warm boot contexts. */
+// Bit-position shift alignments defining fields inside the 29-bit integer block
+#define XCAN_SHIFT_SEQUENCE                 0                  
+#define XCAN_SHIFT_SRC_NODE                 3                  
+#define XCAN_SHIFT_DST_NODE                 10                 
+#define XCAN_SHIFT_MODE                     17                 
+#define XCAN_SHIFT_STREAM_TYPE              19                 
+#define XCAN_SHIFT_MSG_TYPE                 20                 
+#define XCAN_SHIFT_PRIORITY                 21                 
+#define XCAN_SHIFT_SIGNATURE                24                 
 
-#define XCAN_SHIFT_SEQUENCE 0                  /**< Sequence number occupies bits 0 to 2 (Positions 0, 1, 2). */
-#define XCAN_SHIFT_SRC_NODE 3                  /**< Source Node ID occupies bits 3 to 9 (7 bits wide). */
-#define XCAN_SHIFT_DST_NODE 10                 /**< Destination Node ID occupies bits 10 to 16 (7 bits wide). */
-#define XCAN_SHIFT_MODE 17                     /**< Routing Mode (Unicast/Multicast/Broadcast) occupies bits 17 and 18 (2 bits wide). */
-#define XCAN_SHIFT_STREAM_TYPE 19              /**< Stream indicator flag occupies bit position 19 (1 bit wide). */
-#define XCAN_SHIFT_MSG_TYPE 20                 /**< Message type / Plane selection (Control vs App) occupies bit position 20 (1 bit wide). */
-#define XCAN_SHIFT_PRIORITY 21                 /**< Priority level occupies bits 21 to 23 (3 bits wide). */
-#define XCAN_SHIFT_SIGNATURE 24                /**< System Verification Signature occupies bits 24 to 28 (5 bits wide). */
+// Extraction bit-masks matching the corresponding field widths inside the 29-bit frame
+#define XCAN_MASK_SEQUENCE                  0x00000007UL        /**< 3 bits: Tracks packet rolling sequence numbers (0-7). */
+#define XCAN_MASK_SRC_NODE                  0x000003F8UL        /**< 7 bits: Extracts source sender hardware node ID. */
+#define XCAN_MASK_DST_NODE                  0x0001FC00UL        /**< 7 bits: Extracts target destination node ID. */
+#define XCAN_MASK_MODE                      0x00060000UL        /**< 2 bits: Addressing topology (Unicast/Multicast/Broadcast). */
+#define XCAN_MASK_STREAM_TYPE               0x00080000UL        /**< 1 bit: Distinguishes Standard packets from Stream segments. */
+#define XCAN_MASK_MSG_TYPE                  0x00100000UL        /**< 1 bit: Routes frame to Control or Application planes. */
+#define XCAN_MASK_PRIORITY                  0x00E00000UL        /**< 3 bits: Defines message priority hierarchy (0-7 range). */
+#define XCAN_MASK_SIGNATURE                 0x1F000000UL        /**< 5 bits: System validity safety tag verification. */
 
-#define XCAN_MASK_SEQUENCE 0x00000007UL        /**< Binary mask: 00000000000000000000000000000111 (Isolates Sequence) */
-#define XCAN_MASK_SRC_NODE 0x000003F8UL        /**< Binary mask: 00000000000000000000001111111000 (Isolates Source) */
-#define XCAN_MASK_DST_NODE 0x0001FC00UL        /**< Binary mask: 00000000000000011111110000000000 (Isolates Destination) */
-#define XCAN_MASK_MODE 0x00060000UL            /**< Binary mask: 00000000000001100000000000000000 (Isolates Mode) */
-#define XCAN_MASK_STREAM_TYPE 0x00080000UL     /**< Binary mask: 00000000000010000000000000000000 (Isolates Stream Flag) */
-#define XCAN_MASK_MSG_TYPE 0x00100000UL        /**< Binary mask: 00000000000100000000000000000000 (Isolates Plane Flag) */
-#define XCAN_MASK_PRIORITY 0x00E00000UL        /**< Binary mask: 00000000111000000000000000000000 (Isolates Priority) */
-#define XCAN_MASK_SIGNATURE 0x1F000000UL       /**< Binary mask: 00011111000000000000000000000000 (Isolates Protocol Signature) */
-
-#define XCAN_MODE_UNICAST 1                    /**< 1 = Message is point-to-point (one specific sender to one specific receiver). */
-#define XCAN_MODE_MULTICAST 2                  /**< 2 = Message is point-to-group (sent to a designated subset group of devices). */
-#define XCAN_MODE_BROADCAST 3                  /**< 3 = Message is global broadcast (sent to every single device on the bus wiring). */
-
-
-/* ============================================================================
- * FAST INLINE CONSTRUCTORS AND TRANSLATION PROTOCOLS
- * ============================================================================ */
+// Protocol transmission topologies defining recipient routing scopes
+#define XCAN_MODE_UNICAST                   1                    /**< Direct Point-to-Point dedicated link conversation. */
+#define XCAN_MODE_MULTICAST                 2                    /**< Group targeted distribution targeting custom device lists. */
+#define XCAN_MODE_BROADCAST                 3                    /**< Global notification read simultaneously by every node on wire. */
 
 /**
- * @brief Bit-packs individual protocol fields into a standardized 29-bit Extended CAN Identifier.
- *
- *  This utility function is our "envelope address builder". You hand it all the distinct items—like 
- * who you are, who you're talking to, how important the message is, and what chunk index it is—and it shifts 
- * and glues them together using bitwise OR operations into one massive 29-bit integer that CAN hardware accepts.
+ * @brief Bit-packs individual structured protocol fields into a unified 29-bit Extended CAN Identifier.
+ * @param signature Unique 5-bit identification key defining the proprietary network profile.
+ * @param priority Application routing layer priority value (determines arbiter dominance on the wire).
+ * @param msgType Functional plane routing value (0 for Control signaling, 1 for Application data payloads).
+ * @param streamType Continuous segmentation flag (0 for independent single frames, 1 for active data streams).
+ * @param mode Operational addressing target style (1=Unicast, 2=Multicast, 3=Broadcast).
+ * @param dstNode Node network address identifier of the targeted receiving unit.
+ * @param srcNode Node network address identifier of the host generating and sending this packet.
+ * @param seqNum 3-bit rolling sequence frame indexing counter used to reassemble long payload segments.
+ * @return Fully structured uint32_t representation of the packed extended CAN identifier field.
  */
 inline uint32_t mtCAN_PacketId29(
     uint8_t signature,
@@ -220,218 +211,144 @@ inline uint32_t mtCAN_PacketId29(
         (((uint32_t)(seqNum     & 0x07)) << XCAN_SHIFT_SEQUENCE);
 }
 
+/**
+ * @brief Global hardware tracking state holding the active assigned physical node address of this local device.
+ */
 extern uint8_t localNodeId;
 
 /**
- * @brief Creates a standardized outgress token targeting a specific remote destination node.
- * * Automatically handles local node identification, plane routing defaults, 
- * streaming types, sequencing defaults, and routing topologies.
- * * @param destNode The targeted remote receiving node ID (0-63).
- * @param priority Application priority value (typically 2-7).
- * @return uint32_t The fully packed 29-bit outgress CAN token.
+ * @brief Creates a standardized outbound 29-bit CAN identification token targeting a remote recipient.
+ * @param destNode The targeted destination node address on the network bus.
+ * @param priority System priority index applied to steer the arbitration urgency on the wire.
+ * @return Ready-to-transmit uint32_t packed application plane token.
  */
 inline uint32_t create_outgress_token(uint8_t destNode, uint8_t priority) {
-    // Defaults: ST = 0 (XCAN_ST_STREAM), MT = 1 (XCAN_PLANE_APPLICATION)
-    // Mode = XCAN_MODE_UNICAST (1), Seq = 0
     return mtCAN_PacketId29(
-        XCAN_PROTOCOL_SIGNATURE, // 5-bit native verification signature
-        priority,                // User-defined arbitration priority
-        XCAN_PLANE_APPLICATION,  // MT default = 1
-        XCAN_ST_STREAM,          // ST default = 0
-        XCAN_MODE_UNICAST,       // Mode is always unicast (1)
-        destNode,                // Destination node
-        localNodeId,             // Internal source node injection
-        0                        // Sequence field defaults to 0
+        XCAN_PROTOCOL_SIGNATURE, 
+        priority,                
+        XCAN_PLANE_APPLICATION,  
+        XCAN_ST_STREAM,          
+        XCAN_MODE_UNICAST,       
+        destNode,                
+        localNodeId,             
+        0                        
     );
 }
 
 /**
- * @brief Validates an outbound/outgress token against the strict structural rules.
- * * Checks source node context, destination boundaries, priority constraints, 
- * signature correctness, unicast mode, and a zeroed sequence field. Ignores MT and ST entirely.
- * * @param token The raw 29-bit CAN token to evaluate.
- * @return true If the token satisfies all outgress rules; false otherwise.
+ * @brief Validates an outbound 29-bit CAN identifier against strict structural sanity and ownership rules.
+ * Ensures that the packet possesses a valid signature framework and matches our local identity ownership.
+ * @param token The raw packed 29-bit identification code staged for outbound evaluation.
+ * @return True if the token is completely safe to process and dispatch; False if malformed or unauthorized.
  */
 inline bool validate_outgress_token(uint32_t token) {
-    // 1. Verify Protocol Signature
-    if ((token & XCAN_MASK_SIGNATURE) != ((uint32_t)XCAN_PROTOCOL_SIGNATURE << XCAN_SHIFT_SIGNATURE)) {
-        return false;
-    }
-
-    // 2. Verify Mode is strictly Unicast
-    uint8_t mode = (uint8_t)((token & XCAN_MASK_MODE) >> XCAN_SHIFT_MODE);
-    if (mode != XCAN_MODE_UNICAST) {
-        return false;
-    }
-
-    // 3. Verify Sequence field is strictly 0
-    if ((token & XCAN_MASK_SEQUENCE) != 0) {
-        return false;
-    }
-
-    // 4. Verify srcNode belongs to this specific local node
+    if ((token & XCAN_MASK_SIGNATURE) != ((uint32_t)XCAN_PROTOCOL_SIGNATURE << XCAN_SHIFT_SIGNATURE)) return false;
     uint8_t srcNode = (uint8_t)((token & XCAN_MASK_SRC_NODE) >> XCAN_SHIFT_SRC_NODE);
-    if (srcNode != localNodeId) {
-        return false;
-    }
-
-    // 5. Verify destNode fits within valid address boundaries
+    if (srcNode != localNodeId) return false;
     uint8_t destNode = (uint8_t)((token & XCAN_MASK_DST_NODE) >> XCAN_SHIFT_DST_NODE);
-    if (destNode >= MAX_NETWORK_NODES) {
-        return false;
-    }
-
-    // 6. Verify priority matches the Application space constraints (2 to 7)
-    uint8_t priority = (uint8_t)((token & XCAN_MASK_PRIORITY) >> XCAN_SHIFT_PRIORITY);
-    if (priority < 2 || priority > 7) {
-        return false;
-    }
-
+    if (destNode >= MAX_NETWORK_NODES && destNode != M_GLOBAL_BROADCAST_NODE_ID) return false;
     return true;
 }
 
 /**
- * @brief Validates an inbound/ingress token received from the bus.
- * * Mirror validation matching outgress token requirements, ensuring the target 
- * is the local node (or a valid broad/multicast routing) and signature matches.
+ * @brief Validates a raw inbound 29-bit CAN identifier pulled directly from physical transceiver controllers.
+ * Confirms system signature validity and that the frame is directed to us (or is a valid network broadcast).
+ * @param token The raw packed inbound identifier field evaluated for local stack consumption.
+ * @return True if the frame targets this local processor topology; False if it belongs to a different node.
  */
 inline bool validate_ingress_token(uint32_t token) {
     if ((token & XCAN_MASK_SIGNATURE) != ((uint32_t)XCAN_PROTOCOL_SIGNATURE << XCAN_SHIFT_SIGNATURE)) return false;
-    if ((token & XCAN_MASK_SEQUENCE) != 0) return false;
-    
     uint8_t destNode = (uint8_t)((token & XCAN_MASK_DST_NODE) >> XCAN_SHIFT_DST_NODE);
-    // Ingress targets this node explicitly
-    if (destNode != localNodeId) {
+    uint8_t mode = (uint8_t)((token & XCAN_MASK_MODE) >> XCAN_SHIFT_MODE);
+    
+    if (destNode != localNodeId && destNode != M_GLOBAL_BROADCAST_NODE_ID && mode != XCAN_MODE_BROADCAST) {
         return false;
     }
-    
     return true;
 }
 
 /**
- * @brief Swaps the Source and Destination fields of a verified outgress token to create an ingress token.
- * * @param outgressToken The outbound token to flip.
- * @return uint32_t The resulting ingress token, or 0 if validation fails.
+ * @brief Swaps the source and destination address fields inside an outbound token to generate its inbound counterpart.
+ * Effectively creates the flipped mirror ID required to intercept replies coming back from the remote target.
+ * @param outgressToken The active initialized outbound frame identifier tracking target parameters.
+ * @return Flipped tracking token matching the incoming response layout, or 0 if validation fails.
  */
 inline uint32_t convert_outgress_to_ingress(uint32_t outgressToken) {
-    if (!validate_outgress_token(outgressToken)) {
-        return 0; // Guard against blind or corrupt conversions
-    }
-
+    if (!validate_outgress_token(outgressToken)) return 0;
     uint32_t srcNodeBits = (outgressToken & XCAN_MASK_SRC_NODE) >> XCAN_SHIFT_SRC_NODE;
     uint32_t dstNodeBits = (outgressToken & XCAN_MASK_DST_NODE) >> XCAN_SHIFT_DST_NODE;
-
-    // Clear old routing lanes
     uint32_t flippedToken = outgressToken & ~(XCAN_MASK_SRC_NODE | XCAN_MASK_DST_NODE);
-
-    // Re-inject reversed mappings
-    flippedToken |= (srcNodeBits << XCAN_SHIFT_DST_NODE); // Old source becomes new destination
-    flippedToken |= (dstNodeBits << XCAN_SHIFT_SRC_NODE); // Old destination becomes new source
-
+    flippedToken |= (srcNodeBits << XCAN_SHIFT_DST_NODE);
+    flippedToken |= (dstNodeBits << XCAN_SHIFT_SRC_NODE);
     return flippedToken;
 }
 
 /**
- * @brief Swaps the Source and Destination fields of a verified ingress token to target the sender back.
- * * @param ingressToken The incoming token to flip.
- * @return uint32_t The resulting outgress token, or 0 if validation fails.
+ * @brief Reverses address orientations on an incoming packet to construct a matching response identifier.
+ * Ensures the responding frame satisfies all structural egress network rules, including fallback priority checking.
+ * @param ingressToken The raw network-validated incoming message header token to be replied to.
+ * @return A configured outbound token targeting the original sender node safely, or 0 if invalid.
  */
 inline uint32_t convert_ingress_to_outgress(uint32_t ingressToken) {
-    if (!validate_ingress_token(ingressToken)) {
-        // Enforce checking instead of blind switching
-        return 0; 
-    }
-
+    if (!validate_ingress_token(ingressToken)) return 0;
     uint32_t srcNodeBits = (ingressToken & XCAN_MASK_SRC_NODE) >> XCAN_SHIFT_SRC_NODE;
     uint32_t dstNodeBits = (ingressToken & XCAN_MASK_DST_NODE) >> XCAN_SHIFT_DST_NODE;
-
-    // Clear old routing lanes
     uint32_t flippedToken = ingressToken & ~(XCAN_MASK_SRC_NODE | XCAN_MASK_DST_NODE);
-
-    // Re-inject reversed mappings
     flippedToken |= (srcNodeBits << XCAN_SHIFT_DST_NODE);
     flippedToken |= (dstNodeBits << XCAN_SHIFT_SRC_NODE);
-
-    // Ensure priority complies with the outgress app boundary rules (default fallback if needed)
+    
     uint8_t priority = (uint8_t)((flippedToken & XCAN_MASK_PRIORITY) >> XCAN_SHIFT_PRIORITY);
     if (priority < 2) {
         flippedToken &= ~XCAN_MASK_PRIORITY;
-        flippedToken |= ((uint32_t)2 << XCAN_SHIFT_PRIORITY); // Force to app-compliant default priority 2
+        flippedToken |= ((uint32_t)2 << XCAN_SHIFT_PRIORITY); 
     }
-
     return flippedToken;
 }
 
 /**
- * @brief Safely extracts the 3-bit Connection ID (Priority) from a valid application token.
- * @param appToken The raw 29-bit CAN token to parse.
- * @return uint8_t The extracted connection ID (2-7), or 0xFF if validation fails.
+ * @brief Extracts the priority allocation field (which functions as the Connection ID) from an active stream token.
+ * Validates that the requested index resides safely inside standard system operating constraints.
+ * @param appToken The packed 29-bit active application plane identification tracking frame.
+ * @return The extracted connection/priority ID (2-7), or 0xFF if the token format violates structural masks.
  */
 inline uint8_t get_connection_id_from_app_token(uint32_t appToken) {
-    // Structural check: Must match our exact outgress application token design
     if ((appToken & XCAN_MASK_SIGNATURE) != ((uint32_t)XCAN_PROTOCOL_SIGNATURE << XCAN_SHIFT_SIGNATURE)) return 0xFF;
-    if ((appToken & XCAN_MASK_MODE) != ((uint32_t)XCAN_MODE_UNICAST << XCAN_SHIFT_MODE)) return 0xFF;
-    if ((appToken & XCAN_MASK_SEQUENCE) != 0) return 0xFF;
-
-    // Isolate the 3-bit priority field
+    
     uint8_t connID = (uint8_t)((appToken & XCAN_MASK_PRIORITY) >> XCAN_SHIFT_PRIORITY);
-
-    // Enforce the Application Plane boundary rule (Priority must be between 2 and 7)
-    if (connID < 2 || connID > 7) {
-        return 0xFF; 
-    }
-
+    if (connID < 2 || connID > 7) return 0xFF;
     return connID;
 }
 
 /**
- * @brief Regenerates a full Application Plane Token from a matching Control Token and Connection ID.
- * @param controlToken The raw inbound control plane token (MT = 0).
- * @param connID The 3-bit connection priority identifier (Must be 2-7).
- * @return uint32_t The fully formed application token (MT = 1), or 0 if verification fails.
+ * @brief Transforms a low-overhead Control Plane CAN ID into a high-capacity Application Plane streaming CAN ID.
+ * Modifies structural routing flags while preserving vital routing configurations like destination addresses.
+ * @param controlToken Valid control tracking token forming the base addressing envelope.
+ * @param connID Requested target channel priority lane assignment (must reside strictly in the 2-7 range).
+ * @return Configured application plane stream token integer, or 0 if context conditions fail.
  */
 inline uint32_t convert_control_token_to_app_token(uint32_t controlToken, uint8_t connID) {
-    // 1. Boundary Guard: Reject invalid IDs trying to spoof System Space
-    if (connID < 2 || connID > 7) {
-        return 0; 
-    }
-
-    // 2. Validate basic token structure (Signature, Unicast Mode, and Sequence must be 0)
+    if (connID < 2 || connID > 7) return 0;
     if ((controlToken & XCAN_MASK_SIGNATURE) != ((uint32_t)XCAN_PROTOCOL_SIGNATURE << XCAN_SHIFT_SIGNATURE)) return 0;
-    if ((controlToken & XCAN_MASK_MODE) != ((uint32_t)XCAN_MODE_UNICAST << XCAN_SHIFT_MODE)) return 0;
-    if ((controlToken & XCAN_MASK_SEQUENCE) != 0) return 0;
-
-    // 3. Clear existing Priority, Message Type (MT), and Stream Type (ST) fields
+    
     uint32_t appToken = controlToken & ~(XCAN_MASK_PRIORITY | XCAN_MASK_MSG_TYPE | XCAN_MASK_STREAM_TYPE);
-
-    // 4. Inject the validated connID as the new priority, force MT = 1 (Application Plane)
-    // and keep default ST = 0 (XCAN_ST_STREAM)
     appToken |= ((uint32_t)connID << XCAN_SHIFT_PRIORITY);
     appToken |= ((uint32_t)XCAN_PLANE_APPLICATION << XCAN_SHIFT_MSG_TYPE);
     appToken |= ((uint32_t)XCAN_ST_STREAM << XCAN_SHIFT_STREAM_TYPE);
-
     return appToken;
 }
 
 /**
- * @brief Prepares an Application Token for transmitting Control/System frames.
- * * Forces MT = 0 (Control Plane) and constraints priority to 2 (Control Default).
- * * @param appToken The clean application token to convert.
- * * @param priority Optional override for control frame priority (default = 2).
- * @return uint32_t System-ready transmission identifier.
+ * @brief Transforms an Application Plane streaming CAN ID back into a Control Plane system CAN ID.
+ * Used when signaling teardowns, abort notifications, or transport reset conditions.
+ * @param appToken The operational data streaming identifier token.
+ * @param priority The specific priority rank to overwrite inside the new control frame (defaults to 2).
+ * @return Configured control signaling plane token integer.
  */
 inline uint32_t convert_app_token_to_control_token(uint32_t appToken, uint8_t priority = 2) {
-    // 1. Strip the Sequence field, MT field, and Priority field
     uint32_t ctrlToken = appToken & ~(XCAN_MASK_SEQUENCE | XCAN_MASK_MSG_TYPE | XCAN_MASK_PRIORITY);
-
-    // 2. Force MT = 0 (XCAN_PLANE_CONTROL)
-    // 3. Force Priority = 2 (Control space defaults to 2, allows 1 for explicit overrides)
     ctrlToken |= ((uint32_t)XCAN_PLANE_CONTROL << XCAN_SHIFT_MSG_TYPE);
     ctrlToken |= ((uint32_t)priority << XCAN_SHIFT_PRIORITY);
-    
-    // 4. Sequence defaults to 0 (already cleared above)
     return ctrlToken;
 }
-
 
 #endif /* MT_CAN_TYPES_H */

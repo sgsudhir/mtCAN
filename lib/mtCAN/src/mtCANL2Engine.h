@@ -19,17 +19,29 @@
  * QUEUING BOUNDARIES AND MEMORY MASK BIT CONSTRUCTS
  * ============================================================================ */
 
+/** * @brief Allocation ceiling for the Application Layer matrix frame slots (16 connections * 8 frames/seq) at max. 
+ *  This defines the absolute maximum number of sub-frames we can store for larger messages.
+ * 16 parallel channels multiplied by 8 sequential slots each equals 128 total tracking frames.
+ */
+#define TOTAL_APP_FRAMES        (TOTAL_APP_CONN * 8U)
+
+/** * @brief Allocation ceiling for the System/Control Layer matrix circular queue frame buffer. 
+ *  A dedicated pool of 32 slots reserved strictly for network management tasks like 
+ * checking connections (pings) and setting clocks (time synchronization).
+ */
+#define TOTAL_CTRL_FRAMES       ((TOTAL_APP_CONN * 2U) + 4U)
+
 /** @brief Allocation size of the software application data queue buffer. Must remain a power of two. */
-#define M_L2_TX_APP_QUEUE_SIZE 32
+#define M_L2_TX_APP_QUEUE_SIZE  (TOTAL_APP_CONN * 8U)
 
 /** @brief Bitwise wrap mask utilizing power-of-two constraints for fast pointer evaluation. */
-#define M_L2_TX_APP_QUEUE_MASK (M_L2_TX_APP_QUEUE_SIZE - 1)
+#define M_L2_TX_APP_QUEUE_MASK  (M_L2_TX_APP_QUEUE_SIZE - 1U)
 
 /** @brief Dedicated safety queue size for isolated system control data frames. */
-#define M_L2_TX_CTRL_QUEUE_SIZE 8
+#define M_L2_TX_CTRL_QUEUE_SIZE ((TOTAL_APP_CONN * 2U) + 4U)
 
 /** @brief Bitwise wrap mask utilizing power-of-two constraints for the control ring buffer. */
-#define M_L2_TX_CTRL_QUEUE_MASK (M_L2_TX_CTRL_QUEUE_SIZE - 1)
+#define M_L2_TX_CTRL_QUEUE_MASK (M_L2_TX_CTRL_QUEUE_SIZE - 1U)
 
 
 /* ============================================================================
@@ -37,19 +49,19 @@
  * ============================================================================ */
 
 /** @brief Upper queue depth limit which triggers backpressure protection and blocks incoming application inputs. */
-#define M_L2_TX_APP_QUEUE_HIGH_WATERMARK 24
+#define M_L2_TX_APP_QUEUE_HIGH_WATERMARK    24
 
 /** @brief Lower queue depth clearing point where application data ingestion is safely re-enabled. */
-#define M_L2_TX_APP_QUEUE_LOW_WATERMARK  16
+#define M_L2_TX_APP_QUEUE_LOW_WATERMARK     16
 
 /** @brief Maximum lifespan (in milliseconds) a queue can remain blocked before forcing a software flush. */
-#define M_L2_CONGESTION_TIMEOUT_MS   500
+#define M_L2_CONGESTION_TIMEOUT_MS          500
 
 /** @brief Allowed time slice for a hardware transmission mailbox to sit empty/pending before triggering a reset. */
-#define M_L2_QUEUE_STUCK_TIMEOUT_MS  500
+#define M_L2_QUEUE_STUCK_TIMEOUT_MS         500
 
 /** @brief Threshold check of consecutive arbitration loss events before forcing a hardware mailbox clear. */
-#define M_L2_MAX_ALLOWED_ALST_STRIKES 25
+#define M_L2_MAX_ALLOWED_ALST_STRIKES       25
 
 
 /* ============================================================================

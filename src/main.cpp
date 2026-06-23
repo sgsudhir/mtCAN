@@ -1,5 +1,6 @@
 #include <Arduino.h>
 
+#include "mtCAN.h"
 #include "mtCANTypes.h"
 #include "mtCANL2Engine.h"
 #include "mtCANL3Engine.h"
