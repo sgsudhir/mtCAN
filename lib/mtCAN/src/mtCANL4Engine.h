@@ -15,8 +15,7 @@
 #ifndef MTCAN_L4_ENGINE_H
 #define MTCAN_L4_ENGINE_H
 
-#include <stdint.h>
-#include <stddef.h>
+#include <mtCANTypes.h>
 
 /**
  * @brief Safety macro verifying consistent assembly of control frame headers.
@@ -27,7 +26,7 @@
 #define PACK_HEADER(cmd, slot) (0x80 | (((cmd) & 0x0F) << 3) | ((slot) & 0x07))
 
 // Architectural Engineering Limit Boundaries
-#define L4_MAX_PARALLEL_SESSIONS            4       /**< Max concurrent communication sessions supported in memory. */
+
 #define L4_CLOSE_TOKEN_KEYWORD              0x5A5A  /**< Magic safety validation constant used to authorize disconnects. */
 #define L4_DEFAULT_REMOTE_REQUEST_SIZE      262144  /**< Upper streaming threshold boundary constraint (256 KB). */
 #define L4_MAX_L3_PAYLOAD_SIZE              63      /**< Absolute maximum raw capacity envelope allowed per Layer 3 frame. */

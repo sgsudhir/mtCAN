@@ -15,6 +15,8 @@
 
 #pragma once
 
+#include <Arduino.h>
+#include <stdlib.h>
 #include <stdint.h>
 #include <stddef.h>
 #include <string.h>
@@ -27,7 +29,9 @@
  * @brief The absolute maximum number of multi-client communication slots managed simultaneously.
  * Denotes how many independent sessions the software stack can track in parallel memory.
  */
-#define L4_MAX_PARALLEL_SESSIONS            8
+#ifndef L4_MAX_PARALLEL_SESSIONS
+#define L4_MAX_PARALLEL_SESSIONS            2       /**< Max concurrent communication sessions supported in memory. Fallback default if not defined in types */
+#endif
 
 /**
  * @brief Mirror mapping of total application layer connections allowed at any one instance.
